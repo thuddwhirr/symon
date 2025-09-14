@@ -32,10 +32,13 @@ import javax.swing.*;
 import javax.swing.border.BevelBorder;
 import javax.swing.border.Border;
 import java.awt.*;
+import java.awt.datatransfer.Clipboard;
+import java.awt.datatransfer.DataFlavor;
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
+import javax.swing.Timer;
 
 /**
  * The Console is a simulated 80 column x 24 row VT-100 terminal attached to
@@ -53,13 +56,18 @@ public class Console extends JTerminal implements KeyListener, MouseListener {
     // If true, send CRLF (0x0d 0x0a) whenever CR is typed
     private final boolean sendCrForLf;
     private final FifoRingBuffer<Character> typeAheadBuffer;
+    
+    // For rate-limited paste operations
+    private Timer pasteTimer;
+    private String pendingPasteText = "";
+    private int pasteIndex = 0;
 
     public Console(int columns, int rows, Font font, boolean sendCrForLf) {
         super(new Vt100TerminalModel(columns, rows), font);
     		//super(new Vt100TerminalModel(columns, rows));
         // A small type-ahead buffer, as might be found in any real
         // VT100-style serial terminal.
-        this.typeAheadBuffer = new FifoRingBuffer<>(128);
+        this.typeAheadBuffer = new FifoRingBuffer<>(1024);
         this.sendCrForLf = sendCrForLf;
         setBorderWidth(DEFAULT_BORDER_WIDTH);
         addKeyListener(this);
@@ -68,6 +76,9 @@ public class Console extends JTerminal implements KeyListener, MouseListener {
         Border bevelBorder = BorderFactory.createBevelBorder(BevelBorder.LOWERED);
         Border compoundBorder = BorderFactory.createCompoundBorder(emptyBorder, bevelBorder);
         this.setBorder(compoundBorder);
+        
+        // Initialize paste timer (50ms delay = 10x slower than 5ms PS/2 timing)
+        pasteTimer = new Timer(50, e -> processPasteCharacter());
     }
 
     /**
@@ -123,7 +134,70 @@ public class Console extends JTerminal implements KeyListener, MouseListener {
      * @param keyEvent The key event.
      */
     public void keyPressed(KeyEvent keyEvent) {
+        // Handle Ctrl+V for paste
+        if (keyEvent.isControlDown() && keyEvent.getKeyCode() == KeyEvent.VK_V) {
+            try {
+                Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
+                String clipboardText = (String) clipboard.getData(DataFlavor.stringFlavor);
+                
+                // Start rate-limited paste operation
+                startPaste(clipboardText);
+            } catch (Exception e) {
+                // Ignore clipboard errors silently
+            }
+        }
+        
         keyEvent.consume();
+    }
+    
+    /**
+     * Start a rate-limited paste operation
+     */
+    private void startPaste(String text) {
+        // Stop any existing paste operation
+        if (pasteTimer.isRunning()) {
+            pasteTimer.stop();
+        }
+        
+        // Set up new paste operation
+        pendingPasteText = text;
+        pasteIndex = 0;
+        
+        // Start the timer if there's text to paste
+        if (!text.isEmpty()) {
+            pasteTimer.start();
+        }
+    }
+    
+    /**
+     * Process one character from the pending paste text
+     */
+    private void processPasteCharacter() {
+        if (pasteIndex >= pendingPasteText.length()) {
+            // Done pasting
+            pasteTimer.stop();
+            pendingPasteText = "";
+            pasteIndex = 0;
+            return;
+        }
+        
+        char c = pendingPasteText.charAt(pasteIndex++);
+        
+        // Apply the same CR/LF swapping logic as in keyTyped
+        if (SWAP_CR_AND_LF) {
+            if (c == 0x0a) {
+                c = 0x0d;
+            } else if (c == 0x0d) {
+                c = 0x0a;
+            }
+        }
+        
+        if (sendCrForLf && (c == 0x0d)) {
+            typeAheadBuffer.push((char) 0x0d);
+            typeAheadBuffer.push((char) 0x0a);
+        } else {
+            typeAheadBuffer.push(c);
+        }
     }
 
     /**

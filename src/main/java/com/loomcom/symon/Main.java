@@ -77,6 +77,9 @@ public class Main {
                     case "beneater":
                         machineClass = BenEaterMachine.class;
                         break;
+                    case "waffle2e":
+                        machineClass = Waffle2eMachine.class;
+                        break;
                     default:
                         logger.error("Could not start Symon. Unknown machine type {}", machine);
                         return;
@@ -111,7 +114,7 @@ public class Main {
 
             while (true) {
                 if (machineClass == null) {
-                    Object[] possibilities = {"Symon", "Multicomp", "Simple", "BenEater"};
+                    Object[] possibilities = {"Symon", "Multicomp", "Simple", "BenEater", "Waffle2e"};
                     String s = (String)JOptionPane.showInputDialog(
                             null,
                             "Please choose the machine type to be emulated:",
@@ -128,6 +131,8 @@ public class Main {
                         machineClass = SimpleMachine.class;
                     } else if (s != null && s.equals("BenEater")) {
                         machineClass = BenEaterMachine.class;
+                    } else if (s != null && s.equals("Waffle2e")) {
+                        machineClass = Waffle2eMachine.class;
                     } else {
                         machineClass = SymonMachine.class;
                     }

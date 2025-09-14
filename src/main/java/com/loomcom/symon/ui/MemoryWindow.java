@@ -36,8 +36,12 @@ import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.TableModel;
 import javax.swing.text.JTextComponent;
 import java.awt.*;
+import java.awt.datatransfer.Clipboard;
+import java.awt.datatransfer.StringSelection;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.awt.event.KeyEvent;
+import java.awt.event.KeyListener;
 import java.util.EventObject;
 
 
@@ -45,7 +49,7 @@ import java.util.EventObject;
  * This Frame displays the contents of a page of memory. The page number to be displayed
  * is selectable by the user.
  */
-public class MemoryWindow extends JFrame implements ActionListener {
+public class MemoryWindow extends JFrame implements ActionListener, KeyListener {
 
     private static final Logger logger = LoggerFactory.getLogger(MemoryWindow.class);
 
@@ -124,6 +128,10 @@ public class MemoryWindow extends JFrame implements ActionListener {
         memoryTable.getTableHeader().setResizingAllowed(false);
         memoryTable.getTableHeader().setVisible(false);
         memoryTable.setShowGrid(false);
+        
+        // Add key listener for Ctrl+C clipboard support
+        memoryTable.addKeyListener(this);
+        memoryTable.setFocusable(true);
 
         memoryTable.getColumnModel().getColumn(0).setMaxWidth(ADDR_COL_WIDTH);
 
@@ -224,6 +232,65 @@ public class MemoryWindow extends JFrame implements ActionListener {
      */
     public void updateState() {
         memoryTable.updateUI();
+    }
+    
+    /**
+     * Copy the current memory page contents to the clipboard in a readable format
+     */
+    private void copyMemoryToClipboard() {
+        StringBuilder sb = new StringBuilder();
+        int currentPage = getPageNumber();
+        
+        try {
+            // Generate memory dump in format: "ADDRESS: HEX BYTES"
+            for (int row = 0; row < 32; row++) {  // 32 rows per page
+                int baseAddr = (currentPage << 8) | (row * 8);
+                sb.append(String.format("%04X: ", baseAddr));
+                
+                // Add hex bytes for this row (8 bytes per row)
+                for (int col = 0; col < 8; col++) {
+                    try {
+                        int addr = baseAddr + col;
+                        int value = memoryTableModel.bus.read(addr, false);
+                        sb.append(String.format("%02X ", value));
+                    } catch (MemoryAccessException ex) {
+                        sb.append("?? ");
+                    }
+                }
+                
+                // Add newline after each row
+                sb.append("\n");
+            }
+            
+            // Copy to clipboard
+            StringSelection stringSelection = new StringSelection(sb.toString());
+            Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
+            clipboard.setContents(stringSelection, null);
+            
+            logger.info("Memory page {} copied to clipboard", Utils.byteToHex(currentPage));
+            
+        } catch (Exception ex) {
+            logger.error("Failed to copy memory to clipboard", ex);
+        }
+    }
+    
+    // KeyListener implementation
+    @Override
+    public void keyTyped(KeyEvent e) {
+        // Not used
+    }
+    
+    @Override
+    public void keyPressed(KeyEvent e) {
+        // Check for Ctrl+C
+        if (e.getKeyCode() == KeyEvent.VK_C && e.isControlDown()) {
+            copyMemoryToClipboard();
+        }
+    }
+    
+    @Override
+    public void keyReleased(KeyEvent e) {
+        // Not used
     }
 
     /**

@@ -24,8 +24,10 @@
 package com.loomcom.symon;
 
 import com.loomcom.symon.devices.Memory;
+import com.loomcom.symon.devices.PS2Interface;
 import com.loomcom.symon.exceptions.*;
 import com.loomcom.symon.machines.Machine;
+import com.loomcom.symon.machines.Waffle2eMachine;
 import com.loomcom.symon.ui.*;
 import com.loomcom.symon.ui.Console;
 import org.slf4j.Logger;
@@ -56,8 +58,19 @@ public class Simulator {
     private static final Font DEFAULT_FONT = new Font(Font.MONOSPACED, Font.PLAIN, DEFAULT_FONT_SIZE);
     private static final int CONSOLE_BORDER_WIDTH = 10;
 
-    // Clock periods, in NS, for each speed. 0MHz, 1MHz, 2MHz, 3MHz, 4MHz, 5MHz, 6MHz, 7MHz, 8MHz.
-    private static final long[] CLOCK_PERIODS = {0, 1000, 500, 333, 250, 200, 167, 143, 125};
+    // Clock periods, in NS, for each speed index. Index matches MHz (e.g., index 16 = 16MHz).
+    // Sparse array with entries only for supported speeds: 1MHz, 2MHz, 4MHz, 8MHz, 16MHz, 32MHz, 64MHz.
+    private static final long[] CLOCK_PERIODS = new long[65];
+    static {
+        CLOCK_PERIODS[0] = 0;      // 0MHz - no delay
+        CLOCK_PERIODS[1] = 1000;   // 1MHz - 1000ns period  
+        CLOCK_PERIODS[2] = 500;    // 2MHz - 500ns period
+        CLOCK_PERIODS[4] = 250;    // 4MHz - 250ns period
+        CLOCK_PERIODS[8] = 125;    // 8MHz - 125ns period
+        CLOCK_PERIODS[16] = 63;    // 16MHz - 62.5ns period
+        CLOCK_PERIODS[32] = 31;    // 32MHz - 31.25ns period  
+        CLOCK_PERIODS[64] = 16;    // 64MHz - 15.625ns period
+    }
 
     // Since it is very expensive to update the UI with Swing's Event Dispatch Thread, we can't afford
     // to refresh the status view on every simulated clock cycle. Instead, we will only refresh the status view
@@ -103,6 +116,8 @@ public class Simulator {
     private final MemoryWindow memoryWindow;
 
     private final VideoWindow videoWindow;
+    
+    private WaffleVideoWindow waffleVideoWindow;
 
     private final BreakpointsWindow breakpointsWindow;
 
@@ -160,6 +175,19 @@ public class Simulator {
         } else {
             videoWindow = null;
         }
+        
+        // Initialize Waffle2e video window if this is a Waffle2e machine
+        if (machine instanceof Waffle2eMachine) {
+            Waffle2eMachine waffle2eMachine = (Waffle2eMachine) machine;
+            try {
+                waffleVideoWindow = new WaffleVideoWindow(waffle2eMachine.getVideoController(), 1, 1);
+            } catch (IOException e) {
+                logger.error("Failed to load font for Waffle2e video window: " + e.getMessage());
+                waffleVideoWindow = null;
+            }
+        } else {
+            waffleVideoWindow = null;
+        }
     }
 
     /**
@@ -176,6 +204,12 @@ public class Simulator {
         this.statusPane = new StatusPanel(machine);
 
         console.setBorderWidth(CONSOLE_BORDER_WIDTH);
+        
+        // Note: PS/2 keyboard input for Waffle2e machines is handled in the main simulation loop
+        if (machine instanceof Waffle2eMachine) {
+            logger.info("Waffle2e PS/2 keyboard interface will receive input via console");
+            
+        }
 
         // File Chooser
         fileChooser = new JFileChooser(System.getProperty("user.dir"));
@@ -370,10 +404,23 @@ public class Simulator {
             console.repaint();
         }
 
-        // If a key has been pressed, fill the ACIA.
+        // If a key has been pressed, fill the appropriate input device.
         try {
-            if (machine.getAcia() != null && console.hasInput()) {
-                machine.getAcia().rxWrite(console.readInputChar());
+            if (console.hasInput()) {
+                char inputChar = console.readInputChar();
+                logger.debug("CONSOLE INPUT: '{}' ({})", inputChar, (int)inputChar);
+                
+                // For Waffle2e machines, send keyboard input to PS2Interface
+                if (machine instanceof Waffle2eMachine) {
+                    Waffle2eMachine waffle2e = (Waffle2eMachine) machine;
+                    PS2Interface ps2 = waffle2e.getPS2Interface();
+                    
+                    // Use the new character-based simulation method
+                    ps2.simulateCharFromConsole(inputChar);
+                } else if (machine.getAcia() != null) {
+                    // For other machines, use ACIA as before
+                    machine.getAcia().rxWrite(inputChar);
+                }
             }
         } catch (FifoUnderrunException ex) {
             logger.error("Console type-ahead buffer underrun!");
@@ -411,7 +458,7 @@ public class Simulator {
         machine.getCpu().reset();
 
         // Reset the stack program counter
-        machine.getCpu().setProgramCounter(preferences.getProgramStartAddress());
+        machine.getCpu().setProgramCounter(getProgramStartAddress());
 
         // Immediately update the UI.
         updateVisibleState();
@@ -511,6 +558,17 @@ public class Simulator {
     public String disassembleOpAtAddress(int address) throws MemoryAccessException {
         return machine.getCpu().disassembleOpAtAddress(address);
     }
+    
+    /**
+     * Get the program start address, with machine-specific overrides
+     */
+    private int getProgramStartAddress() {
+        // Waffle2e machines use $1D00 to avoid Woz Monitor input buffer at $1C00
+        if (machine instanceof com.loomcom.symon.machines.Waffle2eMachine) {
+            return 0x1D00;
+        }
+        return preferences.getProgramStartAddress();
+    }
 
     class LoadProgramAction extends AbstractAction {
         public LoadProgramAction() {
@@ -543,7 +601,7 @@ public class Simulator {
                             }
 
                             // Now load the program at the starting address.
-                            loadProgram(program, preferences.getProgramStartAddress());
+                            loadProgram(program, getProgramStartAddress());
 
                             SwingUtilities.invokeLater(() -> {
                                 console.reset();
@@ -553,7 +611,7 @@ public class Simulator {
                             // TODO: "Don't Show Again" checkbox
                             JOptionPane.showMessageDialog(mainWindow,
                                     "Loaded Successfully At " +
-                                            String.format("$%04X", preferences.getProgramStartAddress()),
+                                            String.format("$%04X", getProgramStartAddress()),
                                     "OK",
                                     JOptionPane.PLAIN_MESSAGE);
                         }
@@ -653,6 +711,9 @@ public class Simulator {
             if (videoWindow != null) {
                 videoWindow.dispose();
             }
+            if (waffleVideoWindow != null) {
+                waffleVideoWindow.dispose();
+            }
             mainWindow.dispose();
 
             command = MainCommand.SELECTMACHINE;
@@ -706,7 +767,7 @@ public class Simulator {
 
         @Override
         public void actionPerformed(ActionEvent actionEvent) {
-            if (speed < 1 || speed > CLOCK_PERIODS.length - 1) {
+            if (speed < 1 || speed >= CLOCK_PERIODS.length || CLOCK_PERIODS[speed] == 0) {
                 return;
             }
 
@@ -769,6 +830,19 @@ public class Simulator {
         public void actionPerformed(ActionEvent actionEvent) {
             synchronized (videoWindow) {
                 videoWindow.setVisible(!videoWindow.isVisible());
+            }
+        }
+    }
+
+    class ToggleWaffleVideoWindowAction extends AbstractAction {
+        public ToggleWaffleVideoWindowAction() {
+            super("Waffle2e Display", null);
+            putValue(SHORT_DESCRIPTION, "Show or Hide the Waffle2e Video Display");
+        }
+
+        public void actionPerformed(ActionEvent actionEvent) {
+            synchronized (waffleVideoWindow) {
+                waffleVideoWindow.setVisible(!waffleVideoWindow.isVisible());
             }
         }
     }
@@ -893,6 +967,17 @@ public class Simulator {
                 });
                 viewMenu.add(showVideoWindow);
             }
+            
+            if (waffleVideoWindow != null) {
+                final JCheckBoxMenuItem showWaffleVideoWindow = new JCheckBoxMenuItem(new ToggleWaffleVideoWindowAction());
+                waffleVideoWindow.addWindowListener(new WindowAdapter() {
+                    @Override
+                    public void windowClosing(WindowEvent e) {
+                        showWaffleVideoWindow.setSelected(false);
+                    }
+                });
+                viewMenu.add(showWaffleVideoWindow);
+            }
 
             add(viewMenu);
 
@@ -923,6 +1008,9 @@ public class Simulator {
             makeSpeedMenuItem(2, speedSubMenu, speedGroup);
             makeSpeedMenuItem(4, speedSubMenu, speedGroup);
             makeSpeedMenuItem(8, speedSubMenu, speedGroup);
+            makeSpeedMenuItem(16, speedSubMenu, speedGroup);
+            makeSpeedMenuItem(32, speedSubMenu, speedGroup);  
+            makeSpeedMenuItem(64, speedSubMenu, speedGroup);
 
             simulatorMenu.add(speedSubMenu);
             simulatorMenu.add(cpuTypeMenu);
@@ -951,7 +1039,7 @@ public class Simulator {
         }
 
         private void makeSpeedMenuItem(int speed, JMenu subMenu, ButtonGroup group) {
-            if (speed < 1 || speed > CLOCK_PERIODS.length - 1) {
+            if (speed < 1 || speed >= CLOCK_PERIODS.length || CLOCK_PERIODS[speed] == 0) {
                 return;
             }
 
@@ -984,6 +1072,95 @@ public class Simulator {
                 traceLog.refresh();
             }
         });
+    }
+
+    /**
+     * Convert ASCII character to PS/2 scan code.
+     * This is a simplified mapping for common characters.
+     */
+    private int asciiToScanCode(char ascii) {
+        switch (ascii) {
+            // Letters (lowercase)
+            case 'a': return 0x1C;
+            case 'b': return 0x32;
+            case 'c': return 0x21;
+            case 'd': return 0x23;
+            case 'e': return 0x24;
+            case 'f': return 0x2B;
+            case 'g': return 0x34;
+            case 'h': return 0x33;
+            case 'i': return 0x43;
+            case 'j': return 0x3B;
+            case 'k': return 0x42;
+            case 'l': return 0x4B;
+            case 'm': return 0x3A;
+            case 'n': return 0x31;
+            case 'o': return 0x44;
+            case 'p': return 0x4D;
+            case 'q': return 0x15;
+            case 'r': return 0x2D;
+            case 's': return 0x1B;
+            case 't': return 0x2C;
+            case 'u': return 0x3C;
+            case 'v': return 0x2A;
+            case 'w': return 0x1D;
+            case 'x': return 0x22;
+            case 'y': return 0x35;
+            case 'z': return 0x1A;
+            
+            // Letters (uppercase) - same scan codes as lowercase
+            case 'A': return 0x1C;
+            case 'B': return 0x32;
+            case 'C': return 0x21;
+            case 'D': return 0x23;
+            case 'E': return 0x24;
+            case 'F': return 0x2B;
+            case 'G': return 0x34;
+            case 'H': return 0x33;
+            case 'I': return 0x43;
+            case 'J': return 0x3B;
+            case 'K': return 0x42;
+            case 'L': return 0x4B;
+            case 'M': return 0x3A;
+            case 'N': return 0x31;
+            case 'O': return 0x44;
+            case 'P': return 0x4D;
+            case 'Q': return 0x15;
+            case 'R': return 0x2D;
+            case 'S': return 0x1B;
+            case 'T': return 0x2C;
+            case 'U': return 0x3C;
+            case 'V': return 0x2A;
+            case 'W': return 0x1D;
+            case 'X': return 0x22;
+            case 'Y': return 0x35;
+            case 'Z': return 0x1A;
+            
+            // Numbers
+            case '0': return 0x45;
+            case '1': return 0x16;
+            case '2': return 0x1E;
+            case '3': return 0x26;
+            case '4': return 0x25;
+            case '5': return 0x2E;
+            case '6': return 0x36;
+            case '7': return 0x3D;
+            case '8': return 0x3E;
+            case '9': return 0x46;
+            
+            // Special characters
+            case ' ': return 0x29;   // Space
+            case '\r': case '\n': return 0x5A;  // Enter
+            case '\t': return 0x0D;  // Tab
+            case '\b': return 0x66;  // Backspace
+            case 27: return 0x76;    // Escape
+            case '.': return 0x49;   // Period
+            case ':': return 0x4C;   // Colon
+            case ';': return 0x4C;   // Semicolon
+            
+            default: 
+                return 0;  // No mapping
+        }
     }
 
 }
