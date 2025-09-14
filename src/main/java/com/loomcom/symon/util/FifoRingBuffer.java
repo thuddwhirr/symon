@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Seth J. Morabito <web@loomcom.com>
+ * Copyright (c) 2008-2025 Seth J. Morabito <web@loomcom.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -34,8 +34,8 @@ import java.util.Queue;
  */
 public class FifoRingBuffer<E> implements Iterable<E> {
 
-    private Queue<E> fifoBuffer;
-    private int maxLength;
+    private final Queue<E> fifoBuffer;
+    private final int maxLength;
 
     public FifoRingBuffer(int maxLength) {
         this.fifoBuffer = new LinkedList<>();

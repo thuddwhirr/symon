@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Seth J. Morabito <web@loomcom.com>
+ * Copyright (c) 2008-2025 Seth J. Morabito <web@loomcom.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -121,9 +121,6 @@ public class Acia6551 extends Acia {
         // Mask the lower four bits to get the baud rate.
         int baudSelector = data & 0x0f;
         switch (baudSelector) {
-            case 0:
-                rate = 0;
-                break;
             case 1:
                 rate = 50;
                 break;
@@ -168,6 +165,8 @@ public class Acia6551 extends Acia {
                 break;
             case 15:
                 rate = 19200;
+                break;
+            default:
                 break;
         }
 

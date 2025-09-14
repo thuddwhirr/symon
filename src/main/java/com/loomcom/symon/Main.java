@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2016 Seth J. Morabito <web@loomcom.com>
- *                    Maik Merten <maikmerten@googlemail.com>
+ * Copyright (c) 2008-2025 Seth J. Morabito <web@loomcom.com>
+ *                         Maik Merten <maikmerten@googlemail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -22,14 +22,12 @@
  * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-
 package com.loomcom.symon;
 
-import com.loomcom.symon.machines.MulticompMachine;
-import com.loomcom.symon.machines.SimpleMachine;
-import com.loomcom.symon.machines.SymonMachine;
-import com.loomcom.symon.machines.BenEaterMachine;
+import com.loomcom.symon.machines.*;
 import org.apache.commons.cli.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Locale;
 import javax.swing.JOptionPane;
@@ -37,7 +35,8 @@ import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 
 public class Main {
-    
+    private final static Logger logger = LoggerFactory.getLogger(Main.class.getName());
+
      /**
      * Main entry point to the simulator. Creates a simulator and shows the main
      * window.
@@ -45,8 +44,8 @@ public class Main {
      * @param args Program arguments
      */
     public static void main(String[] args) throws Exception {
-        
-        Class machineClass = SymonMachine.class;
+
+        Class<?> machineClass = null;
 
         Options options = new Options();
 
@@ -79,7 +78,7 @@ public class Main {
                         machineClass = BenEaterMachine.class;
                         break;
                     default:
-                        System.err.println("Could not start Symon. Unknown machine type " + machine);
+                        logger.error("Could not start Symon. Unknown machine type {}", machine);
                         return;
                 }
             }
@@ -97,7 +96,7 @@ public class Main {
                         cpuBehavior = InstructionTable.CpuBehavior.CMOS_65816;
                         break;
                     default:
-                        System.err.println("Could not start Symon. Unknown cpu type " + cpu);
+                        logger.error("Could not start Symon. Unknown cpu type {}", cpu);
                         return;
                 }
             }
@@ -140,16 +139,14 @@ public class Main {
 
                 final Simulator simulator = new Simulator(machineClass, cpuBehavior, romFile, haltOnBreak);
 
-                SwingUtilities.invokeLater(new Runnable() {
-                    @Override
-                    public void run() {
-                        try {
-                            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-                            // Create the main UI window
-                            simulator.createAndShowUi();
-                        } catch (Exception e) {
-                            e.printStackTrace();
-                        }
+                SwingUtilities.invokeLater(() -> {
+                    try {
+                        UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+                        // Create the main UI window
+                        simulator.createAndShowUi();
+                    } catch (Exception e) {
+                        logger.error("Error during Symon UI initialization: {}", e.getMessage());
+                        System.exit(-1);
                     }
                 });
 
@@ -163,7 +160,7 @@ public class Main {
                 }
             }
         } catch (ParseException ex) {
-            System.err.println("Could not start Symon. Reason: " + ex.getMessage());
+            logger.error("Could not start Symon. Reason: {}", ex.getMessage());
         }
     }
 }

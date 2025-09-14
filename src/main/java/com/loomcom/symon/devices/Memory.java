@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Seth J. Morabito <web@loomcom.com>
+ * Copyright (c) 2008-2025 Seth J. Morabito <web@loomcom.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -30,8 +30,8 @@ import com.loomcom.symon.exceptions.*;
 
 public class Memory extends Device {
 
-    private boolean readOnly;
-    private int[] mem;
+    private final boolean readOnly;
+    private final int[] mem;
 
     /* Initialize all locations to 0x00 (BRK) */
     private static final int DEFAULT_FILL = 0x00;

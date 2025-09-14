@@ -1,9 +1,9 @@
 SYMON - A 6502 System Simulator
 ===============================
 
-**Version:** 1.4.0
+**Version:** 1.5.0
 
-**Last Updated:** 11 November, 2023
+**Last Updated:** 30 March, 2025
 
 See the file COPYING for license.
 
@@ -30,8 +30,8 @@ welcome.
 
 ## 2.0 Requirements
 
-  - Java 1.8 or higher
-  - Maven 2.0.x or higher (for building from source)
+  - Java 10 or higher
+  - Maven 3.0.x or higher (for building from source)
   - JUnit 4 or higher (for testing)
 
 ## 3.0 Features
@@ -229,7 +229,18 @@ to specify machine type and CPU type. The options are:
   - `-r`,`-rom <file>`: Use the specified file as the ROM image.
   - `-b`,`-brk`: Halt the simulator on a BRK instruction (default is to continue)
 
-### 4.2 ROM images
+### 4.2 High-DPI UI scaling
+
+In certain environments with high-DPI (e.g. 4K) displays, the UI may
+not automatically scale and appear quite tiny. This can be fixed
+with the command line argument `-Dsun.java2d.uiScale=<factor>`,
+for example:
+
+```
+java -Dsun.java2d.uiScale=2.0 -jar symon-1.5.0.jar
+```
+
+### 4.3 ROM images
 
 The simulator requires a ROM image loaded into memory to work
 properly. Without a ROM in memory, the simulator will not be able to
@@ -247,7 +258,7 @@ architecture named 'ehbasic.rom', containing Lee Davison's Enhanced
 *Note*: Presently, EhBASIC only works with the Symon machine
  architecture, not with MULTICOMP.
 
-### 4.3 Loading A Program
+### 4.4 Loading A Program
 
 In addition to ROM images, programs in the form of raw binary object files can
 be loaded directly into memory from "Load Program..." in the File menu.
@@ -263,12 +274,23 @@ for testing.
 
 - 'hello.prg' will continuously print "Hello, 6502 World!" to the console.
 
-### 4.4 Running
+### 4.5 Running
 
 After loading a program or ROM image, clicking "Run" will start the simulator
 running.
 
 ## 5.0 Revision History
+
+  - **1.5.0:** 30 March 2025 - Fixed a bug that caused some 6502
+    instructions to be disassembled improperly in the trace log
+    (GitHub issue #17).
+
+    Added a new "Step Over" button that allows stepping over the
+    current subroutine. This button only becomes active when the
+    next instruction is a "JSR" while stepping through execution 
+    one instruction at a time. It will continue execution until
+    the subroutine returns through a corresponding "RTS" instruction.
+    (GitHub feature request #18).
 
   - **1.4.0:** 11 November 2023 - Adds a new machine, the Ben Eater
     machine.  Correct handling of 6551 interrupts, and several 6551
@@ -355,16 +377,11 @@ running.
 
   - Feedback (in the form of dialogs, status bar, etc).
 
-  - Better debugging tools from the UI, including breakpoints
-    and disassembly.
-
   - UI needs a ton more polish.
 
   - More extensive testing.
 
   - Clean up JavaDoc.
-
-  - Implement CMOS 65C02 instructions and NMOS / CMOS mode flag.
 
   - Allow displaying ACIA status and dumping ACIA buffers, for
     debugging.
@@ -375,9 +392,12 @@ running.
 
   - Symbolic debugging.
 
+  - Better / correct disassembly and tracing of 65C02 and 65C816
+    instructions.
+
 ## 8.0 Copyright and Acknowledgements
 
-**Copyright (c) 2014 Seth J. Morabito &lt;web@loomcom.com&gt;**
+**Copyright (c) 2008-2025 Seth J. Morabito &lt;web@loomcom.com&gt;**
 
   - Portions Copyright (c) 2014 Maik Merten 
     &lt;maikmerten@googlemail.com&gt;

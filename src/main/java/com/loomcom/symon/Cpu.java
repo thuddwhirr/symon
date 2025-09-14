@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Seth J. Morabito <web@loomcom.com>
+ * Copyright (c) 2008-2025 Seth J. Morabito <web@loomcom.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -158,6 +158,8 @@ public class Cpu implements InstructionTable {
      * Performs an individual instruction cycle.
      */
     public void step() throws MemoryAccessException {
+        int hi, lo; // Address calculation
+
         opBeginTime = System.nanoTime();
 
         // Store the address from which the IR was read, for debugging
@@ -317,8 +319,8 @@ public class Cpu implements InstructionTable {
                 break;
             case 0x40: // RTI - Return from Interrupt - Implied
                 setProcessorStatus(stackPop());
-                int lo = stackPop();
-                int hi = stackPop();
+                lo = stackPop();
+                hi = stackPop();
                 setProgramCounter(Utils.address(lo, hi));
                 break;
             case 0x48: // PHA - Push Accumulator - Implied
@@ -1697,6 +1699,10 @@ public class Cpu implements InstructionTable {
         return state.ir;
     }
 
+    public int getNextIr() {
+        return state.nextIr;
+    }
+
     /**
      * @value The value of the Process Status Register bits to be set.
      */
@@ -1923,6 +1929,7 @@ public class Cpu implements InstructionTable {
                 break;
             case AIX:
                 sb.append(" ($").append(Utils.wordToHex(Utils.address(args[0], args[1]))).append(",X)");
+                break;
             case ABX:
                 sb.append(" $").append(Utils.wordToHex(Utils.address(args[0], args[1]))).append(",X");
                 break;
@@ -1934,6 +1941,9 @@ public class Cpu implements InstructionTable {
                 break;
             case IND:
                 sb.append(" ($").append(Utils.wordToHex(Utils.address(args[0], args[1]))).append(")");
+                break;
+            case ZPI:
+                sb.append(" ($").append(Utils.byteToHex(args[0])).append(")");
                 break;
             case XIN:
                 sb.append(" ($").append(Utils.byteToHex(args[0])).append(",X)");

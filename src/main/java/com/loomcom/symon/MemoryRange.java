@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Seth J. Morabito <web@loomcom.com>
+ * Copyright (c) 2008-2025 Seth J. Morabito <web@loomcom.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -27,7 +27,7 @@ import com.loomcom.symon.exceptions.*;
 
 /**
  * MemoryRange is a simple container class representing a literal
- * range of memory, with a staraddress, and an end address.  It has
+ * range of memory, with a start address, and an end address.  It has
  * guards against creating impossible memory ranges, and implements
  * some useful methods for checking address inclusion and range
  * overlaps.

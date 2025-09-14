@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2016 Seth J. Morabito <web@loomcom.com>
- *                    Maik Merten <maikmerten@googlemail.com>
+ * Copyright (c) 2008-2025 Seth J. Morabito <web@loomcom.com>
+ *                         Maik Merten <maikmerten@googlemail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -31,7 +31,7 @@ import com.loomcom.symon.exceptions.MemoryRangeException;
 /**
  * This is a simulation of the Motorola 6850 ACIA, with limited
  * functionality.
- *
+ * <p>
  * Unlike a 16550 UART, the 6850 ACIA has only one-byte transmit and
  * receive buffers. It is the programmer's responsibility to check the
  * status (full or empty) for transmit and receive buffers before

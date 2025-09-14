@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2016 Seth J. Morabito <web@loomcom.com>
- *                    Maik Merten <maikmerten@googlemail.com>
+ * Copyright (c) 2008-2025 Seth J. Morabito <web@loomcom.com>
+ *                         Maik Merten <maikmerten@googlemail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -119,7 +119,10 @@ public class SdController extends Device {
         if (sdImageFile != null) {
             try {
                 FileInputStream fis = new FileInputStream(sdImageFile);
-                fis.skip(this.position);
+                long bytesSkipped = fis.skip(this.position);
+                if (bytesSkipped < this.position) {
+                    logger.log(Level.WARNING, "Failed to seek to position " + this.position);
+                }
                 int read = fis.read(readBuffer);
                 if (read < SECTOR_SIZE) {
                     logger.log(Level.WARNING, "not enough data to fill read buffer from SD image file");
