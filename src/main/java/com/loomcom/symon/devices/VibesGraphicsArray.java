@@ -79,12 +79,15 @@ public class VibesGraphicsArray extends Device {
     private static final int INSTR_TEXT_POSITION = 0x01;   // Set cursor position
     private static final int INSTR_TEXT_CLEAR = 0x02;      // Clear screen with attributes
     private static final int INSTR_GET_TEXT_AT = 0x03;     // Read character at position
+    private static final int INSTR_TEXT_COMMAND = 0x04;    // Process ASCII control characters
     private static final int INSTR_WRITE_PIXEL = 0x10;     // Write pixel at cursor
     private static final int INSTR_PIXEL_POS = 0x11;       // Set pixel cursor position
     private static final int INSTR_WRITE_PIXEL_POS = 0x12; // Set position and write pixel
     private static final int INSTR_CLEAR_SCREEN = 0x13;    // Clear graphics screen
     private static final int INSTR_GET_PIXEL_AT = 0x14;    // Read pixel at position
-    
+    private static final int INSTR_SET_PALETTE_ENTRY = 0x20; // Set 256-color palette entry
+    private static final int INSTR_GET_PALETTE_ENTRY = 0x21; // Get 256-color palette entry
+
     // Registers
     private int modeRegister = 0;
     private int instructionRegister = 0;
@@ -100,10 +103,13 @@ public class VibesGraphicsArray extends Device {
     
     // Graphics mode buffers by mode
     private final int[][][] mode1Buffer = new int[2][480][640];  // 2 pages, 1 bit/pixel
-    private final int[][] mode2Buffer = new int[480][640];        // 1 page, 2 bits/pixel  
+    private final int[][] mode2Buffer = new int[480][640];        // 1 page, 2 bits/pixel
     private final int[][][] mode3Buffer = new int[2][240][320];   // 2 pages, 4 bits/pixel
-    private final int[][] mode4Buffer = new int[240][320];        // 1 page, 6 bits/pixel
-    
+    private final int[][] mode4Buffer = new int[240][320];        // 1 page, 8 bits/pixel (now uses palette)
+
+    // 256-color palette for Mode 4 (12-bit RGB values: RRRR GGGG BBBB)
+    private final int[] palette256 = new int[256];
+
     private int pixelCursorX = 0;
     private int pixelCursorY = 0;
     
@@ -120,19 +126,22 @@ public class VibesGraphicsArray extends Device {
         
         // Initialize graphics buffers
         initializeGraphicsBuffers();
-        
+
+        // Initialize 256-color palette
+        initializePalette256();
+
         logger.info("VibesGraphicsArray initialized at {}-{}", String.format("%04X", startAddress), String.format("%04X", startAddress + 0x0F));
     }
     
     @Override
     public void write(int address, int data) throws MemoryAccessException {
-        logger.debug("Writing to VGA {} = {}", String.format("%02X", address),String.format("%02X", data));
+        // logger.debug("Writing to VGA {} = {}", String.format("%02X", address),String.format("%02X", data));
 
         switch (address) {
             case REG_MODE:
                 int oldMode = modeRegister;
                 modeRegister = data & 0xFF;
-                logger.debug("Mode register set to {}", String.format("%02X", modeRegister));
+                // logger.debug("Mode register set to {}", String.format("%02X", modeRegister));
                 
                 // Notify listeners if video mode changed
                 if ((oldMode & MODE_MASK) != (modeRegister & MODE_MASK) ||
@@ -208,6 +217,8 @@ public class VibesGraphicsArray extends Device {
                 return argIndex == 0;
             case INSTR_GET_TEXT_AT:     // $03 - Execute on ARG1 ($4003) write
                 return argIndex == 1;
+            case INSTR_TEXT_COMMAND:    // $04 - Execute on ARG0 ($4002) write
+                return argIndex == 0;
             case INSTR_WRITE_PIXEL:     // $10 - Execute on ARG0 ($4002) write
                 return argIndex == 0;
             case INSTR_PIXEL_POS:       // $11 - Execute on ARG3 ($4005) write
@@ -218,6 +229,10 @@ public class VibesGraphicsArray extends Device {
                 return argIndex == 0;
             case INSTR_GET_PIXEL_AT:    // $14 - Execute on ARG3 ($4005) write
                 return argIndex == 3;
+            case INSTR_SET_PALETTE_ENTRY: // $20 - Execute on ARG2 ($4004) write (RGB high byte)
+                return argIndex == 2;
+            case INSTR_GET_PALETTE_ENTRY: // $21 - Execute on ARG0 ($4002) write (palette index)
+                return argIndex == 0;
             default:
                 return false; // Unknown instruction
         }
@@ -244,7 +259,11 @@ public class VibesGraphicsArray extends Device {
                 case INSTR_GET_TEXT_AT:
                     executeGetTextAt();
                     break;
-                    
+
+                case INSTR_TEXT_COMMAND:
+                    executeTextCommand();
+                    break;
+
                 case INSTR_WRITE_PIXEL:
                     executeWritePixel();
                     break;
@@ -264,7 +283,15 @@ public class VibesGraphicsArray extends Device {
                 case INSTR_GET_PIXEL_AT:
                     executeGetPixelAt();
                     break;
-                    
+
+                case INSTR_SET_PALETTE_ENTRY:
+                    executeSetPaletteEntry();
+                    break;
+
+                case INSTR_GET_PALETTE_ENTRY:
+                    executeGetPaletteEntry();
+                    break;
+
                 default:
                     logger.warn("Unknown instruction {}", String.format("%02X", instructionRegister));
                     statusRegister |= STATUS_ERROR;
@@ -276,17 +303,17 @@ public class VibesGraphicsArray extends Device {
         }
         
         statusRegister &= ~STATUS_BUSY;
-        logger.debug("Executed instruction {}", String.format("%02X", instructionRegister));
+        // logger.debug("Executed instruction {}", String.format("%02X", instructionRegister));
     }
     
     private void executeTextWrite() {
         int color = argumentRegisters[0];        // ARG0 = attributes
         char character = (char) argumentRegisters[1];  // ARG1 = character code
-        
+
         if (textCursorY < 30 && textCursorX < 80) {
             textBuffer[textCursorY][textCursorX] = character;
             textColorBuffer[textCursorY][textCursorX] = color;
-            
+
             textCursorX++;
             if (textCursorX >= 80) {
                 textCursorX = 0;
@@ -297,6 +324,9 @@ public class VibesGraphicsArray extends Device {
                 }
             }
         }
+
+        // Notify UI to refresh
+        notifyListeners();
     }
     
     private void executeTextPosition() {
@@ -310,7 +340,7 @@ public class VibesGraphicsArray extends Device {
     private void executeTextClear() {
         char fillChar = (char) argumentRegisters[0];
         int color = argumentRegisters[1];
-        
+
         for (int y = 0; y < 30; y++) {
             for (int x = 0; x < 80; x++) {
                 textBuffer[y][x] = fillChar;
@@ -319,12 +349,72 @@ public class VibesGraphicsArray extends Device {
         }
         textCursorX = 0;
         textCursorY = 0;
+
+        // Notify UI to refresh
+        notifyListeners();
     }
-    
+
+    private void executeTextCommand() {
+        int controlCode = argumentRegisters[0];
+
+        switch (controlCode) {
+            case 0x08: // BS - Backspace
+                if (textCursorX > 0) {
+                    textCursorX--;
+                    textBuffer[textCursorY][textCursorX] = ' ';
+                    textColorBuffer[textCursorY][textCursorX] = 0x01; // White on black
+                }
+                break;
+
+            case 0x09: // HT - Horizontal Tab
+                int nextTab = ((textCursorX / 8) + 1) * 8;
+                if (nextTab < 80) {
+                    textCursorX = nextTab;
+                } else {
+                    // Tab wraps to next line if it exceeds column 79
+                    textCursorX = 0;
+                    if (textCursorY < 29) {
+                        textCursorY++;
+                    } else {
+                        // Scroll up one line
+                        scrollTextUp();
+                    }
+                }
+                break;
+
+            case 0x0A: // LF - Line Feed
+                textCursorX = 0;
+                if (textCursorY < 29) {
+                    textCursorY++;
+                } else {
+                    // Scroll up one line
+                    scrollTextUp();
+                }
+                break;
+
+            case 0x0D: // CR - Carriage Return
+                textCursorX = 0;
+                break;
+
+            case 0x7F: // DEL - Delete
+                textBuffer[textCursorY][textCursorX] = ' ';
+                textColorBuffer[textCursorY][textCursorX] = 0x01; // White on black
+                break;
+
+            default:
+                // Invalid control codes are ignored
+                logger.debug("Invalid control code: 0x{}", Integer.toHexString(controlCode));
+                break;
+        }
+
+        // Notify UI to refresh
+        notifyListeners();
+    }
+
     private void executeGetTextAt() {
         int x = argumentRegisters[0];
         int y = argumentRegisters[1];
-        
+
         if (x < 80 && y < 30) {
             resultRegisters[0] = textBuffer[y][x];
             resultRegisters[1] = textColorBuffer[y][x];
@@ -332,7 +422,7 @@ public class VibesGraphicsArray extends Device {
             statusRegister |= STATUS_ERROR;
         }
     }
-    
+
     private void executeWritePixel() {
         int color = argumentRegisters[0];
         int videoMode = modeRegister & MODE_MASK;
@@ -379,7 +469,7 @@ public class VibesGraphicsArray extends Device {
         int x = argumentRegisters[0] | (argumentRegisters[1] << 8);
         int y = argumentRegisters[2] | (argumentRegisters[3] << 8);
         int videoMode = modeRegister & MODE_MASK;
-        
+
         int pixelValue = getPixelFromCurrentMode(x, y, videoMode);
         if (pixelValue != -1) {
             resultRegisters[0] = pixelValue & 0xFF;
@@ -387,6 +477,41 @@ public class VibesGraphicsArray extends Device {
         } else {
             statusRegister |= STATUS_ERROR;
         }
+    }
+
+    // SET_PALETTE_ENTRY: Set 256-color palette entry
+    // ARG0: Palette index (0-255)
+    // ARG1: RGB low byte (GGGG BBBB)
+    // ARG2: RGB high byte (xxxx RRRR) - execute on write
+    private void executeSetPaletteEntry() {
+        int paletteIndex = argumentRegisters[0] & 0xFF;
+        int rgbLow = argumentRegisters[1] & 0xFF;
+        int rgbHigh = argumentRegisters[2] & 0xFF;
+
+        // Combine into 12-bit RGB value: RRRR GGGG BBBB
+        int rgbValue = ((rgbHigh & 0x0F) << 8) | ((rgbLow & 0xF0) << 0) | ((rgbLow & 0x0F) << 0);
+
+        palette256[paletteIndex] = rgbValue;
+
+        logger.debug("Set palette[{}] = ${}", paletteIndex, String.format("%03X", rgbValue));
+    }
+
+    // GET_PALETTE_ENTRY: Get 256-color palette entry
+    // ARG0: Palette index (0-255) - execute on write
+    // Returns RGB low byte in RESULT0, RGB high byte in RESULT1
+    private void executeGetPaletteEntry() {
+        int paletteIndex = argumentRegisters[0] & 0xFF;
+        int rgbValue = palette256[paletteIndex];
+
+        // Split 12-bit RGB (RRRR GGGG BBBB) back into two bytes
+        int rgbLow = ((rgbValue & 0x0F0) << 0) | ((rgbValue & 0x00F) << 0);  // GGGG BBBB
+        int rgbHigh = (rgbValue & 0xF00) >> 8;                              // xxxx RRRR
+
+        resultRegisters[0] = rgbLow & 0xFF;
+        resultRegisters[1] = rgbHigh & 0xFF;
+
+        logger.debug("Get palette[{}] = ${} (low={}, high={})", paletteIndex,
+                    String.format("%03X", rgbValue), String.format("%02X", rgbLow), String.format("%02X", rgbHigh));
     }
     
     private void scrollTextUp() {
@@ -402,7 +527,7 @@ public class VibesGraphicsArray extends Device {
             textColorBuffer[29][x] = 0x01; // White on black
         }
     }
-    
+
     @Override
     public String toString() {
         return String.format("VibesGraphicsArray [Mode: %02X, Status: %02X, Cursor: (%d,%d)]", 
@@ -436,11 +561,57 @@ public class VibesGraphicsArray extends Device {
             }
         }
         
-        // Mode 4 buffer (320x240x64, 1 page)
+        // Mode 4 buffer (320x240x256, 1 page) - now 8-bit for palette indexing
         for (int y = 0; y < 240; y++) {
             for (int x = 0; x < 320; x++) {
                 mode4Buffer[y][x] = 0;
             }
+        }
+    }
+
+    // Initialize 256-color palette with default VGA-style colors
+    private void initializePalette256() {
+        // Initialize with a standard VGA-compatible 256-color palette
+        // Based on the default_palette.mem file structure from the hardware
+
+        // Colors 0-15: Standard 16-color EGA palette (4-bit RGB expansion to 12-bit)
+        palette256[0] = 0x000;   // Black
+        palette256[1] = 0xFFF;   // White
+        palette256[2] = 0x0F0;   // Bright Green
+        palette256[3] = 0x080;   // Dark Green
+        palette256[4] = 0xF00;   // Red
+        palette256[5] = 0x00F;   // Blue
+        palette256[6] = 0xFF0;   // Yellow
+        palette256[7] = 0xF0F;   // Magenta
+        palette256[8] = 0x0FF;   // Cyan
+        palette256[9] = 0x800;   // Dark Red
+        palette256[10] = 0x008;  // Dark Blue
+        palette256[11] = 0x880;  // Brown
+        palette256[12] = 0xAAA;  // Gray
+        palette256[13] = 0x555;  // Dark Gray
+        palette256[14] = 0xCCC;  // Light Gray
+        palette256[15] = 0x08F;  // Light Blue
+
+        // Colors 16-255: Generate gradients and color ramps
+        int index = 16;
+
+        // Add 6x6x6 color cube (216 colors, indices 16-231)
+        for (int r = 0; r < 6; r++) {
+            for (int g = 0; g < 6; g++) {
+                for (int b = 0; b < 6; b++) {
+                    int r12 = (r * 0xFFF) / 5; // Scale to 12-bit
+                    int g12 = (g * 0xFFF) / 5;
+                    int b12 = (b * 0xFFF) / 5;
+                    palette256[index++] = ((r12 & 0xF00) << 0) | ((g12 & 0xF00) >> 4) | ((b12 & 0xF00) >> 8);
+                }
+            }
+        }
+
+        // Add 24 grayscale entries (indices 232-255)
+        for (int i = 0; i < 24; i++) {
+            int gray = (i * 0xFFF) / 23; // Scale to 12-bit
+            int grayValue = ((gray & 0xF00) << 0) | ((gray & 0xF00) >> 4) | ((gray & 0xF00) >> 8);
+            palette256[index++] = grayValue;
         }
     }
     
@@ -467,9 +638,9 @@ public class VibesGraphicsArray extends Device {
                 }
                 break;
                 
-            case 4: // 320x240x64, 1 page
+            case 4: // 320x240x256, 1 page (palette indexed)
                 if (x < 320 && y < 240) {
-                    mode4Buffer[y][x] = color & 0x3F;
+                    mode4Buffer[y][x] = color & 0xFF;
                 }
                 break;
         }
@@ -616,5 +787,9 @@ public class VibesGraphicsArray extends Device {
     
     public int getTextCursorY() {
         return textCursorY;
+    }
+
+    public int[] getPalette256() {
+        return palette256;
     }
 }
