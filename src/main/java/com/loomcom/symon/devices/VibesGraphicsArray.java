@@ -569,49 +569,62 @@ public class VibesGraphicsArray extends Device {
         }
     }
 
-    // Initialize 256-color palette with default VGA-style colors
+    // Initialize 256-color palette with historically accurate VGA palette
     private void initializePalette256() {
-        // Initialize with a standard VGA-compatible 256-color palette
-        // Based on the default_palette.mem file structure from the hardware
+        // VGA Mode 13h default palette - exact 24-bit RGB values from
+        // https://github.com/fzipp/vga/blob/main/palette.go
+        // Converting from 8-bit per channel to 4-bit per channel in code
+        int[] vgaPalette24bit = {
+            0x000000, 0x0000AA, 0x00AA00, 0x00AAAA, 0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
+            0x555555, 0x5555FF, 0x55FF55, 0x55FFFF, 0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
+            0x000000, 0x141414, 0x202020, 0x2C2C2C, 0x383838, 0x454545, 0x515151, 0x616161,
+            0x717171, 0x828282, 0x929292, 0xA2A2A2, 0xB6B6B6, 0xCBCBCB, 0xE3E3E3, 0xFFFFFF,
+            0x0000FF, 0x4100FF, 0x7D00FF, 0xBE00FF, 0xFF00FF, 0xFF00BE, 0xFF007D, 0xFF0041,
+            0xFF0000, 0xFF4100, 0xFF7D00, 0xFFBE00, 0xFFFF00, 0xBEFF00, 0x7DFF00, 0x41FF00,
+            0x00FF00, 0x00FF41, 0x00FF7D, 0x00FFBE, 0x00FFFF, 0x00BEFF, 0x007DFF, 0x0041FF,
+            0x7D7DFF, 0x9E7DFF, 0xBE7DFF, 0xDF7DFF, 0xFF7DFF, 0xFF7DDF, 0xFF7DBE, 0xFF7D9E,
+            0xFF7D7D, 0xFF9E7D, 0xFFBE7D, 0xFFDF7D, 0xFFFF7D, 0xDFFF7D, 0xBEFF7D, 0x9EFF7D,
+            0x7DFF7D, 0x7DFF9E, 0x7DFFBE, 0x7DFFDF, 0x7DFFFF, 0x7DDFFF, 0x7DBEFF, 0x7D9EFF,
+            0xB6B6FF, 0xC7B6FF, 0xDBB6FF, 0xEBB6FF, 0xFFB6FF, 0xFFB6EB, 0xFFB6DB, 0xFFB6C7,
+            0xFFB6B6, 0xFFC7B6, 0xFFDBB6, 0xFFEBB6, 0xFFFFB6, 0xEBFFB6, 0xDBFFB6, 0xC7FFB6,
+            0xB6FFB6, 0xB6FFC7, 0xB6FFDB, 0xB6FFEB, 0xB6FFFF, 0xB6EBFF, 0xB6DBFF, 0xB6C7FF,
+            0x000071, 0x1C0071, 0x380071, 0x550071, 0x710071, 0x710055, 0x710038, 0x71001C,
+            0x710000, 0x711C00, 0x713800, 0x715500, 0x717100, 0x557100, 0x387100, 0x1C7100,
+            0x007100, 0x00711C, 0x007138, 0x007155, 0x007171, 0x005571, 0x003871, 0x001C71,
+            0x383871, 0x453871, 0x553871, 0x613871, 0x713871, 0x713861, 0x713855, 0x713845,
+            0x713838, 0x714538, 0x715538, 0x716138, 0x717138, 0x617138, 0x557138, 0x457138,
+            0x387138, 0x387145, 0x387155, 0x387161, 0x387171, 0x386171, 0x385571, 0x384571,
+            0x515171, 0x595171, 0x615171, 0x695171, 0x715171, 0x715169, 0x715161, 0x715159,
+            0x715151, 0x715951, 0x716151, 0x716951, 0x717151, 0x697151, 0x617151, 0x597151,
+            0x517151, 0x517159, 0x517161, 0x517169, 0x517171, 0x516971, 0x516171, 0x515971,
+            0x000041, 0x100041, 0x200041, 0x300041, 0x410041, 0x410030, 0x410020, 0x410010,
+            0x410000, 0x411000, 0x412000, 0x413000, 0x414100, 0x304100, 0x204100, 0x104100,
+            0x004100, 0x004110, 0x004120, 0x004130, 0x004141, 0x003041, 0x002041, 0x001041,
+            0x202041, 0x282041, 0x302041, 0x382041, 0x412041, 0x412038, 0x412030, 0x412028,
+            0x412020, 0x412820, 0x413020, 0x413820, 0x414120, 0x384120, 0x304120, 0x284120,
+            0x204120, 0x204128, 0x204130, 0x204138, 0x204141, 0x203841, 0x203041, 0x202841,
+            0x2C2C41, 0x302C41, 0x342C41, 0x3C2C41, 0x412C41, 0x412C3C, 0x412C34, 0x412C30,
+            0x412C2C, 0x41302C, 0x41342C, 0x413C2C, 0x41412C, 0x3C412C, 0x34412C, 0x30412C,
+            0x2C412C, 0x2C4130, 0x2C4134, 0x2C413C, 0x2C4141, 0x2C3C41, 0x2C3441, 0x2C3041,
+            0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000,
+            0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000,
+            0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000
+        };
 
-        // Colors 0-15: Standard 16-color EGA palette (4-bit RGB expansion to 12-bit)
-        palette256[0] = 0x000;   // Black
-        palette256[1] = 0xFFF;   // White
-        palette256[2] = 0x0F0;   // Bright Green
-        palette256[3] = 0x080;   // Dark Green
-        palette256[4] = 0xF00;   // Red
-        palette256[5] = 0x00F;   // Blue
-        palette256[6] = 0xFF0;   // Yellow
-        palette256[7] = 0xF0F;   // Magenta
-        palette256[8] = 0x0FF;   // Cyan
-        palette256[9] = 0x800;   // Dark Red
-        palette256[10] = 0x008;  // Dark Blue
-        palette256[11] = 0x880;  // Brown
-        palette256[12] = 0xAAA;  // Gray
-        palette256[13] = 0x555;  // Dark Gray
-        palette256[14] = 0xCCC;  // Light Gray
-        palette256[15] = 0x08F;  // Light Blue
+        // Convert 24-bit RGB to 12-bit RGB (4 bits per channel)
+        for (int i = 0; i < 256; i++) {
+            int color24 = vgaPalette24bit[i];
+            int r8 = (color24 >> 16) & 0xFF;  // Extract 8-bit red
+            int g8 = (color24 >> 8) & 0xFF;   // Extract 8-bit green
+            int b8 = color24 & 0xFF;          // Extract 8-bit blue
 
-        // Colors 16-255: Generate gradients and color ramps
-        int index = 16;
+            // Convert 8-bit to 4-bit by shifting right by 4
+            int r4 = r8 >> 4;
+            int g4 = g8 >> 4;
+            int b4 = b8 >> 4;
 
-        // Add 6x6x6 color cube (216 colors, indices 16-231)
-        for (int r = 0; r < 6; r++) {
-            for (int g = 0; g < 6; g++) {
-                for (int b = 0; b < 6; b++) {
-                    int r12 = (r * 0xFFF) / 5; // Scale to 12-bit
-                    int g12 = (g * 0xFFF) / 5;
-                    int b12 = (b * 0xFFF) / 5;
-                    palette256[index++] = ((r12 & 0xF00) << 0) | ((g12 & 0xF00) >> 4) | ((b12 & 0xF00) >> 8);
-                }
-            }
-        }
-
-        // Add 24 grayscale entries (indices 232-255)
-        for (int i = 0; i < 24; i++) {
-            int gray = (i * 0xFFF) / 23; // Scale to 12-bit
-            int grayValue = ((gray & 0xF00) << 0) | ((gray & 0xF00) >> 4) | ((gray & 0xF00) >> 8);
-            palette256[index++] = grayValue;
+            // Combine into 12-bit value: RRRR GGGG BBBB
+            palette256[i] = (r4 << 8) | (g4 << 4) | b4;
         }
     }
     
@@ -737,7 +750,7 @@ public class VibesGraphicsArray extends Device {
             case 4:
                 for (int y = 0; y < 240; y++) {
                     for (int x = 0; x < 320; x++) {
-                        mode4Buffer[y][x] = color & 0x3F;
+                        mode4Buffer[y][x] = color & 0xFF;
                     }
                 }
                 break;

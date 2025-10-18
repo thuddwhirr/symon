@@ -25,10 +25,13 @@
 package com.loomcom.symon.ui;
 
 import com.loomcom.symon.devices.DeviceChangeListener;
+import com.loomcom.symon.devices.PS2Interface;
 import com.loomcom.symon.devices.VibesGraphicsArray;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.KeyEvent;
+import java.awt.event.KeyListener;
 import java.awt.image.BufferedImage;
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
@@ -41,19 +44,21 @@ import java.util.logging.Logger;
 
 /**
  * WaffleVideoWindow represents the Waffle2e VibesGraphicsArray display output.
- * 
+ *
  * Supports 5 video modes:
  * - Mode 0: Text mode 80x30 characters
- * - Mode 1: Graphics 640x480x2 colors, 2 pages  
+ * - Mode 1: Graphics 640x480x2 colors, 2 pages
  * - Mode 2: Graphics 640x480x4 colors, 1 page
  * - Mode 3: Graphics 320x240x16 colors, 2 pages
- * - Mode 4: Graphics 320x240x64 colors, 1 page
+ * - Mode 4: Graphics 320x240x256 colors, 1 page
+ *
+ * Keyboard input: Routes keyboard events to PS2Interface when window has focus.
  */
-public class WaffleVideoWindow extends JFrame implements DeviceChangeListener {
+public class WaffleVideoWindow extends JFrame implements DeviceChangeListener, KeyListener {
 
     private static final Logger logger = Logger.getLogger(WaffleVideoWindow.class.getName());
 
-    private static final long WINDOW_REPAINT_INTERVAL = 33; // 30fps rate
+    private static final long WINDOW_REPAINT_INTERVAL = 16; // 60fps rate (matches VGA 60Hz)
     
     // Text mode constants
     private static final int TEXT_COLS = 80;
@@ -90,14 +95,15 @@ public class WaffleVideoWindow extends JFrame implements DeviceChangeListener {
 
     private final int scaleX, scaleY;
     private final boolean shouldScale;
-    
+
     private BufferedImage displayImage;
     private Dimension windowDimensions;
     private final VibesGraphicsArray vga;
+    private final PS2Interface ps2Interface;
     private final int[][] fontData; // [character][row] -> 8 pixels as int
-    
+
     private final ScheduledExecutorService scheduler;
-    
+
     // Current video state
     private int currentVideoMode = 0;
     private int currentActivePage = 0;
@@ -145,8 +151,9 @@ public class WaffleVideoWindow extends JFrame implements DeviceChangeListener {
         }
     }
 
-    public WaffleVideoWindow(VibesGraphicsArray vga, int scaleX, int scaleY) throws IOException {
+    public WaffleVideoWindow(VibesGraphicsArray vga, PS2Interface ps2Interface, int scaleX, int scaleY) throws IOException {
         this.vga = vga;
+        this.ps2Interface = ps2Interface;
         this.scaleX = scaleX;
         this.scaleY = scaleY;
         this.shouldScale = (scaleX > 1 || scaleY > 1);
@@ -162,14 +169,19 @@ public class WaffleVideoWindow extends JFrame implements DeviceChangeListener {
         buildDisplayImage();
         
         createAndShowUi();
-        
+
+        // Register keyboard listener to route input to PS2Interface
+        addKeyListener(this);
+        setFocusable(true);
+        setFocusTraversalKeysEnabled(false);
+
         // Schedule regular repaints
         scheduler.scheduleAtFixedRate(new WindowPainter(),
                 WINDOW_REPAINT_INTERVAL,
                 WINDOW_REPAINT_INTERVAL,
                 TimeUnit.MILLISECONDS);
-        
-        logger.info("WaffleVideoWindow initialized");
+
+        logger.info("WaffleVideoWindow initialized with PS2 keyboard support");
     }
 
     /**
@@ -346,7 +358,7 @@ public class WaffleVideoWindow extends JFrame implements DeviceChangeListener {
                 }
             }
         } else if (currentVideoMode == 4) {
-            // Mode 4: 320x240x64 colors - scale 2x to fill 640x480 canvas
+            // Mode 4: 320x240x256 colors - scale 2x to fill 640x480 canvas
             int[][] buffer = vga.getMode4Buffer();
             for (int y = 0; y < 240; y++) {
                 for (int x = 0; x < 320; x++) {
@@ -365,18 +377,18 @@ public class WaffleVideoWindow extends JFrame implements DeviceChangeListener {
     }
 
     /**
-     * Convert 6-bit color to 24-bit RGB (for mode 4)
+     * Convert 12-bit palette color to 24-bit RGB (for mode 4)
      */
-    private int convert6BitToRGB(int color6bit) {
-        int r2 = (color6bit >> 4) & 0x03;  // Red: bits 5-4
-        int g2 = (color6bit >> 2) & 0x03;  // Green: bits 3-2  
-        int b2 = color6bit & 0x03;         // Blue: bits 1-0
-        
-        // Scale 2-bit values (0-3) to 8-bit values (0-255)
-        int r8 = r2 * 85;  // 0,85,170,255
-        int g8 = g2 * 85;
-        int b8 = b2 * 85;
-        
+    private int convert12BitToRGB(int color12bit) {
+        int r4 = (color12bit >> 8) & 0x0F;   // Red: bits 11-8
+        int g4 = (color12bit >> 4) & 0x0F;   // Green: bits 7-4
+        int b4 = color12bit & 0x0F;          // Blue: bits 3-0
+
+        // Scale 4-bit values (0-15) to 8-bit values (0-255)
+        int r8 = r4 * 17;  // 0,17,34,51,68,85,102,119,136,153,170,187,204,221,238,255
+        int g8 = g4 * 17;
+        int b8 = b4 * 17;
+
         return (r8 << 16) | (g8 << 8) | b8;
     }
 
@@ -391,8 +403,10 @@ public class WaffleVideoWindow extends JFrame implements DeviceChangeListener {
                 return new Color(EGA_PALETTE[paletteIndex]);
                 
             case 4:
-                // Direct 6-bit RGB
-                return new Color(convert6BitToRGB(colorValue));
+                // Use 256-color palette lookup
+                int[] palette = vga.getPalette256();
+                int paletteColor = palette[colorValue & 0xFF];
+                return new Color(convert12BitToRGB(paletteColor));
                 
             default:
                 return Color.BLACK;
@@ -461,5 +475,31 @@ public class WaffleVideoWindow extends JFrame implements DeviceChangeListener {
             scheduler.shutdown();
         }
         super.dispose();
+    }
+
+    // KeyListener implementation - routes keyboard input to PS2Interface
+    @Override
+    public void keyPressed(KeyEvent e) {
+        // Forward key press event to PS2Interface
+        if (ps2Interface != null) {
+            ps2Interface.keyPressed(e);
+            logger.fine("WaffleVideoWindow: Key pressed forwarded to PS2Interface: " +
+                       KeyEvent.getKeyText(e.getKeyCode()));
+        }
+    }
+
+    @Override
+    public void keyReleased(KeyEvent e) {
+        // Forward key release event to PS2Interface
+        if (ps2Interface != null) {
+            ps2Interface.keyReleased(e);
+            logger.fine("WaffleVideoWindow: Key released forwarded to PS2Interface: " +
+                       KeyEvent.getKeyText(e.getKeyCode()));
+        }
+    }
+
+    @Override
+    public void keyTyped(KeyEvent e) {
+        // PS2Interface doesn't use keyTyped, but implement for completeness
     }
 }

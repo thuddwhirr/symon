@@ -50,11 +50,23 @@ public class PS2Interface extends Device implements KeyListener {
     
     private static final Logger logger = LoggerFactory.getLogger(PS2Interface.class.getName());
     
-    // Register offsets
-    private static final int REG_DATA = 0x00;     // $4020
-    private static final int REG_STATUS = 0x01;   // $4021
-    private static final int REG_COMMAND = 0x02;  // $4022
-    private static final int REG_CONTROL = 0x03;  // $4023
+    // Register offsets (matching VIA 6522 hardware layout)
+    private static final int REG_PORTB = 0x00;    // $4020 - VIA Port B (output)
+    private static final int REG_PORTA = 0x01;    // $4021 - VIA Port A (PS/2 data input)
+    private static final int REG_DDRB = 0x02;     // $4022 - Data Direction Register B
+    private static final int REG_DDRA = 0x03;     // $4023 - Data Direction Register A
+    private static final int REG_T1CL = 0x04;     // $4024 - Timer 1 Counter Low
+    private static final int REG_T1CH = 0x05;     // $4025 - Timer 1 Counter High
+    private static final int REG_T1LL = 0x06;     // $4026 - Timer 1 Latch Low
+    private static final int REG_T1LH = 0x07;     // $4027 - Timer 1 Latch High
+    private static final int REG_T2CL = 0x08;     // $4028 - Timer 2 Counter Low
+    private static final int REG_T2CH = 0x09;     // $4029 - Timer 2 Counter High
+    private static final int REG_SR = 0x0A;       // $402A - Shift Register
+    private static final int REG_ACR = 0x0B;      // $402B - Auxiliary Control Register
+    private static final int REG_PCR = 0x0C;      // $402C - Peripheral Control Register
+    private static final int REG_IFR = 0x0D;      // $402D - Interrupt Flag Register
+    private static final int REG_IER = 0x0E;      // $402E - Interrupt Enable Register
+    private static final int REG_ORA_NH = 0x0F;   // $402F - Port A Output (no handshake)
     
     // Status register bits
     private static final int STATUS_DATA_READY = 0x01;  // Data available to read
@@ -111,98 +123,239 @@ public class PS2Interface extends Device implements KeyListener {
         SCAN_CODE_MAP[KeyEvent.VK_ENTER] = 0x5A;
         SCAN_CODE_MAP[KeyEvent.VK_ESCAPE] = 0x76;
         SCAN_CODE_MAP[KeyEvent.VK_BACK_SPACE] = 0x66;
+        SCAN_CODE_MAP[KeyEvent.VK_DELETE] = 0x71;        // Delete key
         SCAN_CODE_MAP[KeyEvent.VK_TAB] = 0x0D;
         SCAN_CODE_MAP[KeyEvent.VK_SHIFT] = 0x12;
         SCAN_CODE_MAP[KeyEvent.VK_CONTROL] = 0x14;
         SCAN_CODE_MAP[KeyEvent.VK_ALT] = 0x11;
+
+        // Punctuation keys
+        SCAN_CODE_MAP[KeyEvent.VK_COMMA] = 0x41;         // , <
+        SCAN_CODE_MAP[KeyEvent.VK_PERIOD] = 0x49;        // . >
+        SCAN_CODE_MAP[KeyEvent.VK_SLASH] = 0x4A;         // / ?
+        SCAN_CODE_MAP[KeyEvent.VK_SEMICOLON] = 0x4C;     // ; :
+        SCAN_CODE_MAP[KeyEvent.VK_QUOTE] = 0x52;         // ' "
+        SCAN_CODE_MAP[KeyEvent.VK_OPEN_BRACKET] = 0x54;  // [ {
+        SCAN_CODE_MAP[KeyEvent.VK_CLOSE_BRACKET] = 0x5B; // ] }
+        SCAN_CODE_MAP[KeyEvent.VK_BACK_SLASH] = 0x5D;    // \ |
+        SCAN_CODE_MAP[KeyEvent.VK_MINUS] = 0x4E;         // - _
+        SCAN_CODE_MAP[KeyEvent.VK_EQUALS] = 0x55;        // = +
+        SCAN_CODE_MAP[KeyEvent.VK_BACK_QUOTE] = 0x0E;    // ` ~
     }
     
-    // Interface state
-    private int dataRegister = 0;
-    private int statusRegister = STATUS_READY;
-    private int commandRegister = 0;
-    private int controlRegister = 0;
+    // VIA register state
+    private int portARegister = 0;  // PS/2 data appears here (bit-reversed)
+    private int portBRegister = 0;  // Output port
+    private int ddrARegister = 0;   // Data direction A
+    private int ddrBRegister = 0;   // Data direction B
+    private int t1clRegister = 0;   // Timer 1 Counter Low
+    private int t1chRegister = 0;   // Timer 1 Counter High
+    private int t1llRegister = 0;   // Timer 1 Latch Low
+    private int t1lhRegister = 0;   // Timer 1 Latch High
+    private int t2clRegister = 0;   // Timer 2 Counter Low
+    private int t2chRegister = 0;   // Timer 2 Counter High
+    private int srRegister = 0;     // Shift Register
+    private int acrRegister = 0;    // Auxiliary Control Register
+    private int pcrRegister = 0;    // Peripheral Control Register (CA1 interrupt config)
+    private int ifrRegister = 0;    // Interrupt Flag Register
+    private int ierRegister = 0;    // Interrupt Enable Register
     private boolean interrupt = false;
     
     // Keyboard input queue
     private final BlockingQueue<Integer> keyQueue = new LinkedBlockingQueue<>();
     
     public PS2Interface(int startAddress) throws MemoryRangeException {
-        super(startAddress, startAddress + 0x03, "PS/2 Interface");
-        logger.info("PS/2 Interface initialized at {}-{}", String.format("%04X", startAddress), String.format("%04X", startAddress + 0x03));
+        super(startAddress, startAddress + 0x0F, "PS/2 VIA Interface");
+        logger.info("PS/2 VIA Interface initialized at {}-{}", String.format("%04X", startAddress), String.format("%04X", startAddress + 0x0F));
     }
     
     @Override
     public void write(int address, int data) throws MemoryAccessException {
-        logger.info("PS/2 WRITE: Addr={} Data={}", String.format("%02X", address), String.format("%02X", data & 0xFF));
+        logger.info("VIA WRITE: Addr={} Data={}", String.format("%02X", address), String.format("%02X", data & 0xFF));
 
         switch (address) {
-            case REG_DATA:
-                dataRegister = data & 0xFF;
-                // Writing to data register sends command to PS/2 device
-                handlePS2Command(dataRegister);
+            case REG_PORTB:
+                portBRegister = data & 0xFF;
+                logger.debug("VIA Port B write: {}", String.format("%02X", portBRegister));
                 break;
-                
-            case REG_STATUS:
-                // Status register is mostly read-only, but some bits can be cleared
-                statusRegister &= ~(data & (STATUS_PARITY_ERR | STATUS_TIMEOUT));
+
+            case REG_PORTA:
+                // Port A is typically input for PS/2 data, but allow writes for completeness
+                logger.debug("VIA Port A write: {} (typically input only)", String.format("%02X", data & 0xFF));
                 break;
-                
-            case REG_COMMAND:
-                commandRegister = data & 0xFF;
-                handleInterfaceCommand(commandRegister);
+
+            case REG_DDRB:
+                ddrBRegister = data & 0xFF;
+                logger.debug("VIA DDR B write: {}", String.format("%02X", ddrBRegister));
                 break;
-                
-            case REG_CONTROL:
-                controlRegister = data & 0xFF;
-                handleControlRegister(controlRegister);
+
+            case REG_DDRA:
+                ddrARegister = data & 0xFF;
+                logger.debug("VIA DDR A write: {}", String.format("%02X", ddrARegister));
                 break;
-                
+
+            case REG_T1CL:
+                t1clRegister = data & 0xFF;
+                logger.debug("VIA T1CL write: {}", String.format("%02X", t1clRegister));
+                break;
+
+            case REG_T1CH:
+                t1chRegister = data & 0xFF;
+                logger.debug("VIA T1CH write: {}", String.format("%02X", t1chRegister));
+                break;
+
+            case REG_T1LL:
+                t1llRegister = data & 0xFF;
+                logger.debug("VIA T1LL write: {}", String.format("%02X", t1llRegister));
+                break;
+
+            case REG_T1LH:
+                t1lhRegister = data & 0xFF;
+                logger.debug("VIA T1LH write: {}", String.format("%02X", t1lhRegister));
+                break;
+
+            case REG_T2CL:
+                t2clRegister = data & 0xFF;
+                logger.debug("VIA T2CL write: {}", String.format("%02X", t2clRegister));
+                break;
+
+            case REG_T2CH:
+                t2chRegister = data & 0xFF;
+                logger.debug("VIA T2CH write: {}", String.format("%02X", t2chRegister));
+                break;
+
+            case REG_SR:
+                srRegister = data & 0xFF;
+                logger.debug("VIA SR write: {}", String.format("%02X", srRegister));
+                break;
+
+            case REG_ACR:
+                acrRegister = data & 0xFF;
+                logger.debug("VIA ACR write: {}", String.format("%02X", acrRegister));
+                break;
+
+            case REG_PCR:
+                pcrRegister = data & 0xFF;
+                logger.debug("VIA PCR write: {} (CA1 interrupt config)", String.format("%02X", pcrRegister));
+                break;
+
+            case REG_IFR:
+                // Writing to IFR clears interrupt flags
+                ifrRegister &= ~data;
+                logger.debug("VIA IFR clear: {}, now: {}", String.format("%02X", data), String.format("%02X", ifrRegister));
+                break;
+
+            case REG_IER:
+                ierRegister = data & 0xFF;
+                logger.debug("VIA IER write: {} (interrupt enable)", String.format("%02X", ierRegister));
+                break;
+
+            case REG_ORA_NH:
+                logger.debug("VIA ORA_NH write: {} (no handshake)", String.format("%02X", data & 0xFF));
+                break;
+
             default:
-                logger.warn("Write to invalid PS/2 register at {}", String.format("%02X", address));
+                logger.warn("Write to invalid VIA register at {}", String.format("%02X", address));
                 break;
         }
-        
+
         notifyListeners();
     }
     
     @Override
     public int read(int address, boolean cpuAccess) throws MemoryAccessException {
-        logger.info("PS/2 READ: Addr={} Status={} Interrupt={}",
-            String.format("%02X", address),
-            String.format("%02X", statusRegister),
-            interrupt);
         switch (address) {
-            case REG_DATA:
-                // Reading data register gets next byte from PS/2 device
-                if (!keyQueue.isEmpty()) {
-                    dataRegister = keyQueue.poll();
-                    updateDataReadyStatus();
-                }
-                // Clear interrupt when data is read, but re-assert if more data available
-                if (cpuAccess) {
+            case REG_PORTB:
+                logger.info("VIA Port B READ: {}", String.format("%02X", portBRegister));
+                return portBRegister;
+
+            case REG_PORTA:
+                // Port A contains PS/2 data from shift register
+                if (!keyQueue.isEmpty() && cpuAccess) {
+                    int scanCode = keyQueue.poll();
+                    // Use scan code directly (hardware wiring corrected)
+                    portARegister = scanCode;
+
+                    // Clear interrupt when data is read
                     interrupt = false;
-                    // Schedule new interrupt if queue still has data
+
+                    // Schedule new interrupt if more data available
                     if (!keyQueue.isEmpty()) {
                         scheduleNextInterrupt();
                     }
+
+                    logger.info("VIA Port A READ: Scan code={}",
+                               String.format("%02X", portARegister));
                 }
-                return dataRegister;
-                
-            case REG_STATUS:
-                return statusRegister;
-                
-            case REG_COMMAND:
-                return commandRegister;
-                
-            case REG_CONTROL:
-                return controlRegister;
-                
+                return portARegister;
+
+            case REG_DDRB:
+                logger.debug("VIA DDR B READ: {}", String.format("%02X", ddrBRegister));
+                return ddrBRegister;
+
+            case REG_DDRA:
+                logger.debug("VIA DDR A READ: {}", String.format("%02X", ddrARegister));
+                return ddrARegister;
+
+            case REG_T1CL:
+                logger.debug("VIA T1CL read: {}", String.format("%02X", t1clRegister));
+                return t1clRegister;
+
+            case REG_T1CH:
+                logger.debug("VIA T1CH read: {}", String.format("%02X", t1chRegister));
+                return t1chRegister;
+
+            case REG_T1LL:
+                logger.debug("VIA T1LL read: {}", String.format("%02X", t1llRegister));
+                return t1llRegister;
+
+            case REG_T1LH:
+                logger.debug("VIA T1LH read: {}", String.format("%02X", t1lhRegister));
+                return t1lhRegister;
+
+            case REG_T2CL:
+                logger.debug("VIA T2CL read: {}", String.format("%02X", t2clRegister));
+                return t2clRegister;
+
+            case REG_T2CH:
+                logger.debug("VIA T2CH read: {}", String.format("%02X", t2chRegister));
+                return t2chRegister;
+
+            case REG_SR:
+                logger.debug("VIA SR read: {}", String.format("%02X", srRegister));
+                return srRegister;
+
+            case REG_ACR:
+                logger.debug("VIA ACR read: {}", String.format("%02X", acrRegister));
+                return acrRegister;
+
+            case REG_PCR:
+                logger.debug("VIA PCR read: {}", String.format("%02X", pcrRegister));
+                return pcrRegister;
+
+            case REG_IFR:
+                // Set CA1 flag if interrupt is pending
+                int currentIFR = ifrRegister;
+                if (interrupt) {
+                    currentIFR |= 0x02; // CA1 interrupt flag
+                }
+                logger.debug("VIA IFR read: {} (interrupt={})", String.format("%02X", currentIFR), interrupt);
+                return currentIFR;
+
+            case REG_IER:
+                logger.debug("VIA IER read: {}", String.format("%02X", ierRegister));
+                return ierRegister;
+
+            case REG_ORA_NH:
+                logger.debug("VIA ORA_NH read: {}", String.format("%02X", portARegister));
+                return portARegister;
+
             default:
-                logger.warn("Read from invalid PS/2 register at {}", String.format("%02X", address));
+                logger.warn("Read from invalid VIA register at {}", String.format("%02X", address));
                 return 0;
         }
     }
+
     
     private void handlePS2Command(int command) {
         // Handle commands sent to PS/2 devices
@@ -252,25 +405,25 @@ public class PS2Interface extends Device implements KeyListener {
     private void handleControlRegister(int control) {
         // Handle control register changes
         if ((control & STATUS_INHIBIT) != 0) {
-            statusRegister |= STATUS_INHIBIT;
+            ifrRegister |= STATUS_INHIBIT;
             logger.debug("PS/2 clock inhibited");
         } else {
-            statusRegister &= ~STATUS_INHIBIT;
+            ifrRegister &= ~STATUS_INHIBIT;
             logger.debug("PS/2 clock enabled");
         }
     }
     
     private void updateDataReadyStatus() {
         if (!keyQueue.isEmpty()) {
-            statusRegister |= STATUS_DATA_READY;
-            // Trigger interrupt when data becomes available
+            // Trigger interrupt when data becomes available (CA1 interrupt simulation)
             if (!interrupt) {
                 interrupt = true;
                 getBus().assertIrq();
+                logger.debug("PS/2 CA1 interrupt asserted - data available");
             }
         } else {
-            statusRegister &= ~STATUS_DATA_READY;
             interrupt = false;
+            logger.debug("PS/2 interrupt cleared - no data available");
         }
     }
     
@@ -354,8 +507,8 @@ public class PS2Interface extends Device implements KeyListener {
     
     @Override
     public String toString() {
-        return String.format("PS/2Interface [Status: %02X, Data: %02X, Queue: %d]", 
-                           statusRegister, dataRegister, keyQueue.size());
+        return String.format("PS/2Interface [PortA: %02X, PortB: %02X, Queue: %d, IRQ: %s]",
+                           portARegister, portBRegister, keyQueue.size(), interrupt ? "ASSERTED" : "CLEARED");
     }
     
     // Public accessors
@@ -515,6 +668,8 @@ public class PS2Interface extends Device implements KeyListener {
             case '\\': return 0x5D;      // Backslash
             case '-': return 0x4E;       // Minus/dash
             case '=': return 0x55;       // Equals
+            case '`': return 0x0E;       // Backtick/grave accent
+            case '~': return 0x0E;       // Tilde (shifted backtick)
             // Shifted punctuation (map to base key scan codes)
             case '!': return 0x16;       // Shift+1
             case '@': return 0x1E;       // Shift+2

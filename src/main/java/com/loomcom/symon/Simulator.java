@@ -94,6 +94,7 @@ public class Simulator {
     // requested
     private int stepsSinceLastUpdate = 0;
     private int stepsSinceLastCrtcRefresh = 0;
+    private int stepsSinceLastConsoleInput = 0;
 
     // The number of steps to run per click of the "Step" button
     private int stepsPerClick = 1;
@@ -180,7 +181,10 @@ public class Simulator {
         if (machine instanceof Waffle2eMachine) {
             Waffle2eMachine waffle2eMachine = (Waffle2eMachine) machine;
             try {
-                waffleVideoWindow = new WaffleVideoWindow(waffle2eMachine.getVideoController(), 1, 1);
+                // Pass PS2Interface so WaffleVideoWindow can route keyboard input directly
+                waffleVideoWindow = new WaffleVideoWindow(waffle2eMachine.getVideoController(),
+                                                         waffle2eMachine.getPS2Interface(),
+                                                         1, 1);
             } catch (IOException e) {
                 logger.error("Failed to load font for Waffle2e video window: " + e.getMessage());
                 waffleVideoWindow = null;
@@ -404,27 +408,26 @@ public class Simulator {
             console.repaint();
         }
 
-        // If a key has been pressed, fill the appropriate input device.
+        // If a key has been pressed in Console window, fill ACIA for serial terminal behavior
+        // Note: WaffleVideoWindow has its own KeyListener that feeds PS2Interface directly
+        // Rate limit: Only process one character every ~1000 cycles (~1ms at 1MHz) to avoid ACIA overrun
         try {
-            if (console.hasInput()) {
+            if (console.hasInput() && stepsSinceLastConsoleInput > 1000) {
                 char inputChar = console.readInputChar();
                 logger.debug("CONSOLE INPUT: '{}' ({})", inputChar, (int)inputChar);
-                
-                // For Waffle2e machines, send keyboard input to PS2Interface
-                if (machine instanceof Waffle2eMachine) {
-                    Waffle2eMachine waffle2e = (Waffle2eMachine) machine;
-                    PS2Interface ps2 = waffle2e.getPS2Interface();
-                    
-                    // Use the new character-based simulation method
-                    ps2.simulateCharFromConsole(inputChar);
-                } else if (machine.getAcia() != null) {
-                    // For other machines, use ACIA as before
+
+                // Console input always goes to ACIA (serial terminal)
+                // This provides serial terminal behavior when Console window has focus
+                if (machine.getAcia() != null) {
                     machine.getAcia().rxWrite(inputChar);
+                    stepsSinceLastConsoleInput = 0;  // Reset counter after sending char
                 }
             }
         } catch (FifoUnderrunException ex) {
             logger.error("Console type-ahead buffer underrun!");
         }
+
+        stepsSinceLastConsoleInput++;
 
         if (videoWindow != null && stepsSinceLastCrtcRefresh++ > STEPS_BETWEEN_CRTC_REFRESHES) {
             stepsSinceLastCrtcRefresh = 0;

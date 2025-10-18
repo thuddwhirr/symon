@@ -68,9 +68,12 @@ public class Waffle2eMachine implements Machine {
     // Serial Port 0 (W65C51 ACIA) at $4010-$4013
     private static final int SERIAL0_BASE = 0x4010;
     
-    // PS/2 Interface (W65C22 VIA) at $4020-$4023  
+    // PS/2 Interface (W65C22 VIA) at $4020-$4023
     private static final int PS2_BASE = 0x4020;
-    
+
+    // Peripheral Controller (W65C22 VIA) at $4030-$403F
+    private static final int PERIPHERAL_BASE = 0x4030;
+
     // Serial Port 1 (W65C51 ACIA) at $4110-$4113
     private static final int SERIAL1_BASE = 0x4110;
     
@@ -89,6 +92,8 @@ public class Waffle2eMachine implements Machine {
     private final Acia   serial0;
     private final Acia   serial1;
     private final PS2Interface ps2Interface;
+    private final PeripheralController peripheralController;
+    private final SpiSDCard sdCard;
     
     public Waffle2eMachine(String romFile) throws Exception {
         this.bus = new Bus(BUS_BOTTOM, BUS_TOP);
@@ -98,8 +103,24 @@ public class Waffle2eMachine implements Machine {
         // Initialize peripherals
         this.video = new VibesGraphicsArray(VIDEO_BASE);
         this.serial0 = new Acia6551(SERIAL0_BASE);
-        this.serial1 = new Acia6551(SERIAL1_BASE); 
+        this.serial1 = new Acia6551(SERIAL1_BASE);
         this.ps2Interface = new PS2Interface(PS2_BASE);
+        this.peripheralController = new PeripheralController(PERIPHERAL_BASE);
+
+        // Initialize SD card and register it on SPI CS0
+        this.sdCard = new SpiSDCard();
+
+        // Mount test disk image if available
+        String testDiskPath = "/Users/johnwolthuis/projects/waffle2e_computer/software/test_programs/test_disk_old.img";
+        File testDisk = new File(testDiskPath);
+        if (testDisk.exists()) {
+            logger.info("Mounting test disk image: {}", testDiskPath);
+            sdCard.mountImage(testDiskPath);
+        } else {
+            logger.warn("Test disk image not found at: {}", testDiskPath);
+        }
+
+        this.peripheralController.registerSpiDevice(0, sdCard);
         
         // Add components to bus
         bus.addCpu(cpu);
@@ -108,6 +129,7 @@ public class Waffle2eMachine implements Machine {
         bus.addDevice(serial0);
         bus.addDevice(serial1);
         bus.addDevice(ps2Interface);
+        bus.addDevice(peripheralController);
         
         // Handle ROM loading
         if (romFile != null) {
@@ -133,6 +155,7 @@ public class Waffle2eMachine implements Machine {
         logger.info("Serial Port 0: {}-{}", String.format("%04X", SERIAL0_BASE), String.format("%04X", SERIAL0_BASE + 0x03));
         logger.info("Serial Port 1: {}-{}", String.format("%04X", SERIAL1_BASE), String.format("%04X", SERIAL1_BASE + 0x03));
         logger.info("PS/2 Interface: {}-{}", String.format("%04X", PS2_BASE), String.format("%04X", PS2_BASE + 0x03));
+        logger.info("Peripheral Controller: {}-{}", String.format("%04X", PERIPHERAL_BASE), String.format("%04X", PERIPHERAL_BASE + 0x0F));
     }
     
     @Override
@@ -214,5 +237,53 @@ public class Waffle2eMachine implements Machine {
     
     public PS2Interface getPS2Interface() {
         return ps2Interface;
+    }
+
+    /**
+     * Mount a disk image file in the SD card
+     * @param imagePath path to disk image file
+     * @return true if successful
+     */
+    public boolean mountDiskImage(String imagePath) {
+        return sdCard.mountImage(imagePath);
+    }
+
+    /**
+     * Unmount current disk image
+     */
+    public void unmountDiskImage() {
+        sdCard.unmountImage();
+    }
+
+    /**
+     * Get current disk image path
+     * @return image path or null if no image mounted
+     */
+    public String getDiskImagePath() {
+        return sdCard.getImagePath();
+    }
+
+    /**
+     * Check if a disk image is mounted
+     * @return true if image is mounted
+     */
+    public boolean isDiskImageMounted() {
+        return sdCard.isImageMounted();
+    }
+
+    /**
+     * Get SD card device for direct access
+     * @return SD card device
+     */
+    public SpiSDCard getSDCard() {
+        return sdCard;
+    }
+
+    /**
+     * Get peripheral controller for SPI/I2C access
+     * @return peripheral controller
+     */
+    public PeripheralController getPeripheralController() {
+        return peripheralController;
     }
 }

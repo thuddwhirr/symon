@@ -24,6 +24,8 @@
 package com.loomcom.symon.devices;
 
 import com.loomcom.symon.exceptions.MemoryRangeException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 /**
@@ -32,6 +34,7 @@ import com.loomcom.symon.exceptions.MemoryRangeException;
 
 public abstract class Acia extends Device {
 
+    private static final Logger logger = LoggerFactory.getLogger(Acia.class);
     private final String name;
 
     /**
@@ -113,6 +116,7 @@ public abstract class Acia extends Device {
             lastRxRead = System.nanoTime();
             overrun = false;
             rxFull = false;
+            logger.debug("ACIA rxRead: CPU read character '{}' ({}), rxFull cleared", (char)rxChar, rxChar);
         }
         return rxChar;
     }
@@ -120,6 +124,7 @@ public abstract class Acia extends Device {
     public synchronized void rxWrite(int data) {
         if (rxFull) {
             overrun = true;
+            logger.debug("ACIA rxWrite: Overrun detected! rxChar={}, newData={}", rxChar, data);
         }
 
         rxFull = true;
@@ -127,6 +132,9 @@ public abstract class Acia extends Device {
         if (receiveIrqEnabled) {
             interrupt = true;
             getBus().assertIrq();
+            logger.debug("ACIA rxWrite: Data received '{}' ({}), IRQ asserted", (char)data, data);
+        } else {
+            logger.debug("ACIA rxWrite: Data received '{}' ({}), but RX IRQ disabled", (char)data, data);
         }
 
         rxChar = data;
@@ -148,6 +156,14 @@ public abstract class Acia extends Device {
         lastTxWrite = System.nanoTime();
         txChar = data;
         txEmpty = false;
+
+        // Log the character being sent for debugging 6502 assembly output
+        char ch = (char) data;
+        if (data >= 32 && data <= 126) { // Printable ASCII
+            logger.info("6502 SERIAL OUTPUT: '{}' (0x{})", ch, String.format("%02X", data));
+        } else {
+            logger.info("6502 SERIAL OUTPUT: 0x{}", String.format("%02X", data));
+        }
     }
 
     /**
