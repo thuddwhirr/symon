@@ -32,20 +32,20 @@ import org.slf4j.LoggerFactory;
 
 /**
  * VibesGraphicsArray Video Controller for Waffle2e Computer
- * 
+ *
  * Memory mapped at $4000-$400F (16 bytes):
  * $4000 - Mode Control Register
  * $4001 - Instruction Register
  * $4002-$400B - Argument Registers 0-9
  * $400C-$400E - Result Registers 0-2 (read-only)
  * $400F - Status Register (read-only)
- * 
+ *
  * Supports text and graphics modes with command-based interface.
  */
 public class VibesGraphicsArray extends Device {
-    
+
     private static final Logger logger = LoggerFactory.getLogger(VibesGraphicsArray.class.getName());
-    
+
     // Register offsets
     private static final int REG_MODE = 0x00;        // $4000
     private static final int REG_INSTRUCTION = 0x01; // $4001
@@ -73,6 +73,7 @@ public class VibesGraphicsArray extends Device {
     private static final int MODE_MASK = 0x07;      // Bits 0-2: Video mode (0-4)
     private static final int ACTIVE_PAGE = 0x08;    // Bit 3: Active page (display)
     private static final int WORKING_PAGE = 0x10;   // Bit 4: Working page (CPU writes)
+    private static final int GRAPHICS_MODE = 0x80;  // Bit 7: 0=text mode, 1=graphics mode
     
     // Instruction opcodes
     private static final int INSTR_TEXT_WRITE = 0x00;      // Write character to screen
@@ -434,8 +435,10 @@ public class VibesGraphicsArray extends Device {
     }
     
     private void executePixelPosition() {
-        pixelCursorX = argumentRegisters[0] | (argumentRegisters[1] << 8);
-        pixelCursorY = argumentRegisters[2] | (argumentRegisters[3] << 8);
+        // FPGA bug workaround: Expects big-endian (high byte first)
+        // ARG0 = X high, ARG1 = X low, ARG2 = Y high, ARG3 = Y low
+        pixelCursorX = argumentRegisters[1] | (argumentRegisters[0] << 8);
+        pixelCursorY = argumentRegisters[3] | (argumentRegisters[2] << 8);
         
         // Clamp to current mode dimensions
         int videoMode = modeRegister & MODE_MASK;
@@ -466,8 +469,10 @@ public class VibesGraphicsArray extends Device {
     }
     
     private void executeGetPixelAt() {
-        int x = argumentRegisters[0] | (argumentRegisters[1] << 8);
-        int y = argumentRegisters[2] | (argumentRegisters[3] << 8);
+        // FPGA bug workaround: Expects big-endian (high byte first)
+        // ARG0 = X high, ARG1 = X low, ARG2 = Y high, ARG3 = Y low
+        int x = argumentRegisters[1] | (argumentRegisters[0] << 8);
+        int y = argumentRegisters[3] | (argumentRegisters[2] << 8);
         int videoMode = modeRegister & MODE_MASK;
 
         int pixelValue = getPixelFromCurrentMode(x, y, videoMode);

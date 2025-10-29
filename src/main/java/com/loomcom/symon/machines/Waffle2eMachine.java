@@ -61,18 +61,18 @@ public class Waffle2eMachine implements Machine {
     
     // I/O Space $4000-$4FFF
     private static final int IO_BASE = 0x4000;
-    
+
     // Video Controller (VibesGraphicsArray) at $4000-$400F
     private static final int VIDEO_BASE = 0x4000;
-    
+
     // Serial Port 0 (W65C51 ACIA) at $4010-$4013
     private static final int SERIAL0_BASE = 0x4010;
-    
-    // PS/2 Interface (W65C22 VIA) at $4020-$4023
-    private static final int PS2_BASE = 0x4020;
 
     // Peripheral Controller (W65C22 VIA) at $4030-$403F
     private static final int PERIPHERAL_BASE = 0x4030;
+
+    // PS/2 Interface (W65C22 VIA) at $4070-$407F
+    private static final int PS2_BASE = 0x4070;
 
     // Serial Port 1 (W65C51 ACIA) at $4110-$4113
     private static final int SERIAL1_BASE = 0x4110;

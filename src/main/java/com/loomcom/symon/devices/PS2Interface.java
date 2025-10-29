@@ -37,36 +37,38 @@ import java.util.concurrent.LinkedBlockingQueue;
 
 /**
  * PS/2 Interface for Waffle2e Computer using W65C22 VIA
- * 
- * Memory mapped at $4020-$4023 (4 bytes):
- * $4020 - PS/2 Data Register (keyboard/mouse data)
- * $4021 - PS/2 Status Register (status and flags)
- * $4022 - PS/2 Command Register (commands to devices)
- * $4023 - PS/2 Control Register (interface control)
- * 
- * Simulates PS/2 keyboard and mouse interface through VIA-based protocol.
+ *
+ * Memory mapped at $4070-$407F (16 bytes - full VIA register set):
+ * $4070 - VIA Port B (output)
+ * $4071 - VIA Port A (PS/2 data input from shift registers)
+ * $4072 - Data Direction Register B
+ * $4073 - Data Direction Register A
+ * $4074-$407E - VIA timers, shift register, control registers
+ * $407F - Port A Output (no handshake)
+ *
+ * Simulates PS/2 keyboard interface through VIA + 74HC595 shift registers.
  */
 public class PS2Interface extends Device implements KeyListener {
     
     private static final Logger logger = LoggerFactory.getLogger(PS2Interface.class.getName());
     
     // Register offsets (matching VIA 6522 hardware layout)
-    private static final int REG_PORTB = 0x00;    // $4020 - VIA Port B (output)
-    private static final int REG_PORTA = 0x01;    // $4021 - VIA Port A (PS/2 data input)
-    private static final int REG_DDRB = 0x02;     // $4022 - Data Direction Register B
-    private static final int REG_DDRA = 0x03;     // $4023 - Data Direction Register A
-    private static final int REG_T1CL = 0x04;     // $4024 - Timer 1 Counter Low
-    private static final int REG_T1CH = 0x05;     // $4025 - Timer 1 Counter High
-    private static final int REG_T1LL = 0x06;     // $4026 - Timer 1 Latch Low
-    private static final int REG_T1LH = 0x07;     // $4027 - Timer 1 Latch High
-    private static final int REG_T2CL = 0x08;     // $4028 - Timer 2 Counter Low
-    private static final int REG_T2CH = 0x09;     // $4029 - Timer 2 Counter High
-    private static final int REG_SR = 0x0A;       // $402A - Shift Register
-    private static final int REG_ACR = 0x0B;      // $402B - Auxiliary Control Register
-    private static final int REG_PCR = 0x0C;      // $402C - Peripheral Control Register
-    private static final int REG_IFR = 0x0D;      // $402D - Interrupt Flag Register
-    private static final int REG_IER = 0x0E;      // $402E - Interrupt Enable Register
-    private static final int REG_ORA_NH = 0x0F;   // $402F - Port A Output (no handshake)
+    private static final int REG_PORTB = 0x00;    // $4070 - VIA Port B (output)
+    private static final int REG_PORTA = 0x01;    // $4071 - VIA Port A (PS/2 data input)
+    private static final int REG_DDRB = 0x02;     // $4072 - Data Direction Register B
+    private static final int REG_DDRA = 0x03;     // $4073 - Data Direction Register A
+    private static final int REG_T1CL = 0x04;     // $4074 - Timer 1 Counter Low
+    private static final int REG_T1CH = 0x05;     // $4075 - Timer 1 Counter High
+    private static final int REG_T1LL = 0x06;     // $4076 - Timer 1 Latch Low
+    private static final int REG_T1LH = 0x07;     // $4077 - Timer 1 Latch High
+    private static final int REG_T2CL = 0x08;     // $4078 - Timer 2 Counter Low
+    private static final int REG_T2CH = 0x09;     // $4079 - Timer 2 Counter High
+    private static final int REG_SR = 0x0A;       // $407A - Shift Register
+    private static final int REG_ACR = 0x0B;      // $407B - Auxiliary Control Register
+    private static final int REG_PCR = 0x0C;      // $407C - Peripheral Control Register
+    private static final int REG_IFR = 0x0D;      // $407D - Interrupt Flag Register
+    private static final int REG_IER = 0x0E;      // $407E - Interrupt Enable Register
+    private static final int REG_ORA_NH = 0x0F;   // $407F - Port A Output (no handshake)
     
     // Status register bits
     private static final int STATUS_DATA_READY = 0x01;  // Data available to read
