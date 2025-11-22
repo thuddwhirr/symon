@@ -471,10 +471,10 @@ public class VibesGraphicsArray extends Device {
     }
     
     private void executeGetPixelAt() {
-        // FPGA bug workaround: Expects big-endian (high byte first)
+        // Match FPGA hardware bug: Expects big-endian (high byte first)
         // ARG0 = X high, ARG1 = X low, ARG2 = Y high, ARG3 = Y low
-        int x = argumentRegisters[1] | (argumentRegisters[0] << 8);
-        int y = argumentRegisters[3] | (argumentRegisters[2] << 8);
+        int x = (argumentRegisters[0] << 8) | argumentRegisters[1];
+        int y = (argumentRegisters[2] << 8) | argumentRegisters[3];
         int videoMode = modeRegister & MODE_MASK;
 
         int pixelValue = getPixelFromCurrentMode(x, y, videoMode);
