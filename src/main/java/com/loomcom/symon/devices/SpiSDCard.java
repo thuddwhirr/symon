@@ -126,7 +126,15 @@ public class SpiSDCard implements SpiDevice {
     @Override
     public void deselect() {
         selected = false;
-        logger.debug("SD card deselected");
+        // Clear transient response state so re-select starts clean
+        responseReady = false;
+        responseBitIndex = 0;
+        hasPendingResponse = false;
+        usingResponseQueue = false;
+        responseQueueIndex = 0;
+        responseQueueLength = 0;
+        Arrays.fill(preCalculatedResponseBits, 1);
+        logger.debug("SD card deselected and transient response state cleared");
     }
 
     @Override
@@ -427,14 +435,18 @@ public class SpiSDCard implements SpiDevice {
                 dataTransferIndex++;
             }
         } else if (dataTransferIndex == SECTOR_SIZE + 1) {
-            // Send first CRC byte (dummy)
-            responseValue = 0x00; // Dummy CRC
-            logger.debug("SD Card sending CRC byte 1 (dummy)");
+            // Calculate CRC-16-CCITT for the sector
+            int crc = calculateCRC16(dataBuffer, SECTOR_SIZE);
+            // Send first CRC byte (high byte)
+            responseValue = (crc >> 8) & 0xFF;
+            logger.debug("SD Card sending CRC byte 1 (high): 0x{}", String.format("%02X", responseValue));
             dataTransferIndex++;
         } else if (dataTransferIndex == SECTOR_SIZE + 2) {
-            // Send second CRC byte (dummy) and end transfer
-            responseValue = 0x00; // Dummy CRC
-            logger.info("SD Card sending CRC byte 2 (dummy) - transfer complete");
+            // Calculate CRC-16-CCITT for the sector
+            int crc = calculateCRC16(dataBuffer, SECTOR_SIZE);
+            // Send second CRC byte (low byte) and end transfer
+            responseValue = crc & 0xFF;
+            logger.info("SD Card sending CRC byte 2 (low): 0x{} - transfer complete", String.format("%02X", responseValue));
             inDataTransfer = false;
             dataTransferIndex = 0;
             dataSent = false;
@@ -565,5 +577,33 @@ public class SpiSDCard implements SpiDevice {
      */
     public boolean isImageMounted() {
         return imageFile != null && imagePath != null;
+    }
+
+    /**
+     * Calculate CRC-16-CCITT for data buffer
+     * Uses polynomial 0x1021 (x^16 + x^12 + x^5 + 1)
+     * Initial value: 0x0000
+     * This matches the SD card specification for data transfer CRC
+     *
+     * @param data buffer to calculate CRC for (int array where each element is 0-255)
+     * @param length number of bytes to process
+     * @return 16-bit CRC value
+     */
+    private int calculateCRC16(int[] data, int length) {
+        int crc = 0x0000;  // CRC-16-CCITT initial value
+
+        for (int i = 0; i < length; i++) {
+            crc ^= (data[i] & 0xFF) << 8;  // XOR byte into high byte of CRC
+
+            for (int bit = 0; bit < 8; bit++) {
+                if ((crc & 0x8000) != 0) {
+                    crc = (crc << 1) ^ 0x1021;  // Polynomial 0x1021
+                } else {
+                    crc = crc << 1;
+                }
+            }
+        }
+
+        return crc & 0xFFFF;  // Return 16-bit result
     }
 }
