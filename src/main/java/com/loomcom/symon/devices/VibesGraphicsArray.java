@@ -435,10 +435,12 @@ public class VibesGraphicsArray extends Device {
     }
     
     private void executePixelPosition() {
-        // FPGA bug workaround: Expects big-endian (high byte first)
-        // ARG0 = X high, ARG1 = X low, ARG2 = Y high, ARG3 = Y low
-        pixelCursorX = argumentRegisters[1] | (argumentRegisters[0] << 8);
-        pixelCursorY = argumentRegisters[3] | (argumentRegisters[2] << 8);
+        // Match FPGA hardware bug: Expects big-endian (high byte first)
+        // Software sends: ARG0 = X high, ARG1 = X low, ARG2 = Y high, ARG3 = Y low
+        // FPGA hardware: pixel_cursor_x <= {inst_arg0, inst_arg1}
+        // This is backwards from 6502 convention but matches actual FPGA behavior
+        pixelCursorX = (argumentRegisters[0] << 8) | argumentRegisters[1];
+        pixelCursorY = (argumentRegisters[2] << 8) | argumentRegisters[3];
         
         // Clamp to current mode dimensions
         int videoMode = modeRegister & MODE_MASK;
