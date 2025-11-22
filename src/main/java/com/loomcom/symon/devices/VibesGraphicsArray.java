@@ -435,12 +435,11 @@ public class VibesGraphicsArray extends Device {
     }
     
     private void executePixelPosition() {
-        // Match FPGA hardware bug: Expects big-endian (high byte first)
-        // Software sends: ARG0 = X high, ARG1 = X low, ARG2 = Y high, ARG3 = Y low
-        // FPGA hardware: pixel_cursor_x <= {inst_arg0, inst_arg1}
-        // This is backwards from 6502 convention but matches actual FPGA behavior
-        pixelCursorX = (argumentRegisters[0] << 8) | argumentRegisters[1];
-        pixelCursorY = (argumentRegisters[2] << 8) | argumentRegisters[3];
+        // FPGA hardware bug: expects ARG0=low, ARG1=high (little-endian in hardware)
+        // But software sends ARG0=high, ARG1=low (with workaround for the bug)
+        // So we need to interpret as: ARG1 is high byte, ARG0 is low byte
+        pixelCursorX = (argumentRegisters[1] << 8) | argumentRegisters[0];
+        pixelCursorY = (argumentRegisters[3] << 8) | argumentRegisters[2];
         
         // Clamp to current mode dimensions
         int videoMode = modeRegister & MODE_MASK;
@@ -471,10 +470,9 @@ public class VibesGraphicsArray extends Device {
     }
     
     private void executeGetPixelAt() {
-        // Match FPGA hardware bug: Expects big-endian (high byte first)
-        // ARG0 = X high, ARG1 = X low, ARG2 = Y high, ARG3 = Y low
-        int x = (argumentRegisters[0] << 8) | argumentRegisters[1];
-        int y = (argumentRegisters[2] << 8) | argumentRegisters[3];
+        // FPGA hardware bug: ARG1 is high byte, ARG0 is low byte
+        int x = (argumentRegisters[1] << 8) | argumentRegisters[0];
+        int y = (argumentRegisters[3] << 8) | argumentRegisters[2];
         int videoMode = modeRegister & MODE_MASK;
 
         int pixelValue = getPixelFromCurrentMode(x, y, videoMode);
