@@ -20,12 +20,20 @@ import com.loomcom.symon.exceptions.MemoryRangeException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * Waffle2e Peripheral Controller
  * VIA 6522-based I2C/SPI interface for external devices
+ *
+ * I2C Implementation Notes:
+ * The 6502 driver uses open-drain bit-banging via DDR control:
+ * - DDR bit = 1 (output): Pin is driven LOW (ORA bit is always 0)
+ * - DDR bit = 0 (input): Pin floats HIGH via external pull-up
+ * This means we detect line states from DDR, not ORA.
  */
 public class PeripheralController extends Device {
 
@@ -96,6 +104,32 @@ public class PeripheralController extends Device {
     // SPI devices (6 chip selects)
     private final Map<Integer, SpiDevice> spiDevices = new HashMap<>();
 
+    // I2C devices (keyed by 7-bit address)
+    private final Map<Integer, I2cDevice> i2cDevices = new HashMap<>();
+
+    // I2C state machine
+    private enum I2cState {
+        IDLE,               // Waiting for START
+        ADDRESS,            // Receiving address byte
+        DATA_WRITE,         // Receiving data (master -> slave)
+        DATA_READ           // Sending data (slave -> master)
+    }
+
+    private I2cState i2cState = I2cState.IDLE;
+    private boolean i2cSclPrevious = true;    // Previous SCL state (high = idle)
+    private boolean i2cSdaPrevious = true;    // Previous SDA state (high = idle)
+    private int i2cBitCount = 0;              // Bits received/sent in current byte (0-8)
+    private int i2cShiftReg = 0;              // Shift register for byte assembly
+    private I2cDevice i2cActiveDevice = null; // Currently addressed device
+    private boolean i2cReadMode = false;      // True if master is reading from slave
+    private int i2cReadByte = 0xFF;           // Byte being sent to master
+    private boolean i2cSlaveAck = false;      // ACK from slave to send (true=ACK, false=NACK)
+    // State machine notes:
+    // - i2cBitCount counts from 0 to 8 during data transfer
+    // - When bitCount reaches 8, handleI2cByteComplete() is called and bitCount stays at 8
+    // - bitCount==8 indicates we're in ACK phase (between 8th data bit and next byte)
+    // - On SCL falling edge after ACK, bitCount resets to 0 for next byte
+
     public PeripheralController(int address) throws MemoryRangeException {
         super(address, address + PERIPHERAL_SIZE - 1, "Waffle2e Peripheral Controller");
 
@@ -131,6 +165,31 @@ public class PeripheralController extends Device {
         }
     }
 
+    /**
+     * Register an I2C device
+     * @param device I2C device to register (address is obtained from device)
+     */
+    public void registerI2cDevice(I2cDevice device) {
+        int address = device.getAddress();
+        if (address < 0 || address > 0x7F) {
+            throw new IllegalArgumentException("I2C address must be 0x00-0x7F");
+        }
+        i2cDevices.put(address, device);
+        logger.info("Registered I2C device '{}' at address 0x{}", device.getName(), String.format("%02X", address));
+    }
+
+    /**
+     * Remove I2C device
+     * @param address 7-bit I2C address
+     */
+    public void unregisterI2cDevice(int address) {
+        I2cDevice device = i2cDevices.remove(address);
+        if (device != null) {
+            device.reset();
+            logger.info("Unregistered I2C device '{}' from address 0x{}", device.getName(), String.format("%02X", address));
+        }
+    }
+
     @Override
     public void write(int address, int data) throws MemoryAccessException {
         int register = address;  // Bus already provides relative address
@@ -147,7 +206,10 @@ public class PeripheralController extends Device {
                 ddrB = data & 0xFF;
                 break;
             case DDRA:
+                int oldDdrA = ddrA;
                 ddrA = data & 0xFF;
+                // Handle I2C - DDR changes affect line states
+                handleI2cDdrChange(oldDdrA, ddrA);
                 break;
             case T1CL:
                 t1LatchLow = data & 0xFF;
@@ -320,20 +382,22 @@ public class PeripheralController extends Device {
     }
 
     private int readPortA() {
-        // Extract SPI signals for logging
-        int cs = portA & SPI_CS_MASK;
-        int clk = (portB & SPI_SCK) != 0 ? 1 : 0;
-        int mosi = (portB & SPI_MOSI) != 0 ? 1 : 0;
-        int miso = (portB & SPI_MISO) != 0 ? 1 : 0;
+        // Start with current port A value
+        int result = portA;
 
-        // Log the read operation (REDUCED LOGGING)
-        // logger.info(spiStepCounter + ": read porta = 0x" + String.format("%02X", portA) +
-        //            ", cs=0x" + String.format("%02X", cs) + ", clk=" + clk + ", mosi=" + mosi + ", miso=" + miso);
+        // Handle I2C SDA input when SDA is configured as input (DDR bit = 0)
+        if ((ddrA & I2C_SDA) == 0) {
+            // SDA is input - return value from I2C bus
+            int sdaValue = getI2cSdaValue();
+            if (sdaValue != 0) {
+                result |= I2C_SDA;   // SDA high
+            } else {
+                result &= ~I2C_SDA;  // SDA low
+            }
+        }
+
         spiStepCounter++;
-
-        // Return current port A value
-        // TODO: Handle I2C SDA input when configured as input
-        return portA;
+        return result;
     }
 
     private void handleChipSelectChanges(int oldPortA, int newPortA) {
@@ -413,6 +477,266 @@ public class PeripheralController extends Device {
         }
     }
 
+    // =========================================================================
+    // I2C Implementation
+    // =========================================================================
+
+    /**
+     * Get current SCL line state from DDR (open-drain: DDR=1 means driven LOW)
+     */
+    private boolean getI2cSclState() {
+        // Open-drain: If DDR bit is set (output), line is driven LOW
+        // If DDR bit is clear (input), line floats HIGH via pull-up
+        return (ddrA & I2C_SCL) == 0;  // true = HIGH, false = LOW
+    }
+
+    /**
+     * Get current SDA line state from DDR (open-drain: DDR=1 means driven LOW)
+     */
+    private boolean getI2cSdaState() {
+        return (ddrA & I2C_SDA) == 0;  // true = HIGH, false = LOW
+    }
+
+    /**
+     * Get SDA value to return when master reads the bus.
+     * During slave ACK or data read phases, the slave controls SDA.
+     */
+    private int getI2cSdaValue() {
+        // During ACK phase (bitCount 8 or 9), slave drives ACK
+        // bitCount==8: waiting for ACK clock to rise (8th bit done, ACK clock not yet)
+        // bitCount==9: ACK clock has risen, master is reading now
+        if ((i2cBitCount == 8 || i2cBitCount == 9) && i2cState != I2cState.IDLE) {
+            // ACK phase - return slave's ACK (low = ACK, high = NACK)
+            int sdaValue = i2cSlaveAck ? 0 : 1;
+            logger.debug("I2C getI2cSdaValue: ACK phase (bitCount={}), slaveAck={}, returning {}",
+                        i2cBitCount, i2cSlaveAck, sdaValue);
+            return sdaValue;
+        }
+
+        // During read mode, slave drives SDA with data bits
+        if (i2cState == I2cState.DATA_READ && i2cBitCount >= 1 && i2cBitCount <= 8) {
+            // Return current bit of read byte (MSB first)
+            // Note: bitCount has already been incremented by handleI2cSclRising() before
+            // the master reads SDA, so we use bitCount-1 to get the correct bit position
+            int bitPos = 7 - (i2cBitCount - 1);
+            int bitValue = (i2cReadByte >> bitPos) & 1;
+            logger.debug("I2C getI2cSdaValue: DATA_READ bit {}, readByte=0x{}, returning {}",
+                        i2cBitCount - 1, String.format("%02X", i2cReadByte), bitValue);
+            return bitValue;
+        }
+
+        // Otherwise, SDA floats high (pull-up)
+        return 1;
+    }
+
+    /**
+     * Handle DDR changes that affect I2C line states.
+     * This is where we detect START, STOP, and clock edges.
+     */
+    private void handleI2cDdrChange(int oldDdrA, int newDdrA) {
+        // Calculate line states (open-drain logic)
+        // DDR=0 means input (line floats HIGH via pull-up)
+        // DDR=1 means output (line driven LOW since ORA bits are 0)
+        boolean oldScl = (oldDdrA & I2C_SCL) == 0;  // HIGH if DDR=0
+        boolean newScl = (newDdrA & I2C_SCL) == 0;
+        boolean oldSda = (oldDdrA & I2C_SDA) == 0;
+        boolean newSda = (newDdrA & I2C_SDA) == 0;
+
+        // During ACK phase (after 8 bits received), the master releases SDA to read ACK from slave.
+        // This SDA rise should NOT be interpreted as STOP condition.
+        // bitCount == 8 means we've received all data bits and are in ACK phase
+        boolean inAckPhase = (i2cState != I2cState.IDLE && i2cBitCount == 8);
+
+
+        // Detect START condition: SDA falls while SCL is high
+        // START can happen anytime (including during a transaction = repeated START)
+        if (newScl && oldSda && !newSda) {
+            handleI2cStart();
+        }
+        // Detect STOP condition: SDA rises while SCL is high
+        // But NOT during ACK phase when master releases SDA to read slave's ACK
+        else if (newScl && !oldSda && newSda && !inAckPhase) {
+            handleI2cStop();
+        }
+        // Detect SCL rising edge (data sampling)
+        else if (!oldScl && newScl) {
+            handleI2cSclRising(newSda);
+        }
+        // Detect SCL falling edge (data change allowed)
+        else if (oldScl && !newScl) {
+            handleI2cSclFalling();
+        }
+
+        // Update previous states
+        i2cSclPrevious = newScl;
+        i2cSdaPrevious = newSda;
+    }
+
+    /**
+     * Handle I2C START condition
+     */
+    private void handleI2cStart() {
+        logger.debug("I2C START detected");
+
+        // If we were in a transaction, this is a repeated START
+        if (i2cState != I2cState.IDLE && i2cActiveDevice != null) {
+            logger.debug("I2C Repeated START");
+            // Don't call stop on device - repeated start continues transaction
+        }
+
+        // Reset for new address byte
+        i2cState = I2cState.ADDRESS;
+        i2cBitCount = 0;
+        i2cShiftReg = 0;
+        i2cActiveDevice = null;
+        i2cSlaveAck = false;
+    }
+
+    /**
+     * Handle I2C STOP condition
+     */
+    private void handleI2cStop() {
+        logger.debug("I2C STOP detected");
+
+        // Notify active device
+        if (i2cActiveDevice != null) {
+            i2cActiveDevice.stop();
+        }
+
+        // Reset state
+        i2cState = I2cState.IDLE;
+        i2cBitCount = 0;
+        i2cShiftReg = 0;
+        i2cActiveDevice = null;
+        i2cReadMode = false;
+        i2cSlaveAck = false;
+    }
+
+    /**
+     * Handle I2C SCL rising edge - sample SDA
+     */
+    private void handleI2cSclRising(boolean sda) {
+        if (i2cState == I2cState.IDLE) {
+            return;  // Nothing to do
+        }
+
+        if (i2cBitCount == 8) {
+            // This is the 9th clock (ACK clock) rising edge
+            // bitCount==8 means we finished 8 data bits and the 8th clock has fallen
+            // Now on the 9th clock rising, master reads slave's ACK (or sends ACK in read mode)
+            logger.debug("I2C ACK clock rising: state={}, sda={}, slaveAck={}", i2cState, sda ? 1 : 0, i2cSlaveAck);
+
+            if (i2cState == I2cState.DATA_READ) {
+                // Master sends ACK/NACK - SDA high = NACK (stop reading)
+                boolean masterAck = !sda;  // ACK = SDA low
+                logger.debug("I2C master {} read byte", masterAck ? "ACKed" : "NACKed");
+
+                if (masterAck && i2cActiveDevice != null) {
+                    // Prepare next byte
+                    i2cReadByte = i2cActiveDevice.readByte(true);
+                    logger.debug("I2C prepared next read byte: 0x{}", String.format("%02X", i2cReadByte));
+                }
+            }
+            // For ADDRESS and DATA_WRITE: slave ACK is already set, master reads it via getI2cSdaValue()
+
+            // Increment to 9 to mark that ACK clock has risen
+            // On the next SCL falling edge, we'll see bitCount==9 and reset for next byte
+            i2cBitCount = 9;
+        } else if (i2cBitCount < 8) {
+            // Receiving a data bit (from master during write, ignored during read)
+            if (i2cState != I2cState.DATA_READ) {
+                // Shift in the bit (MSB first)
+                i2cShiftReg = (i2cShiftReg << 1) | (sda ? 1 : 0);
+                logger.debug("I2C bit {}: SDA={}, shiftReg=0x{}",
+                            i2cBitCount, sda ? 1 : 0, String.format("%02X", i2cShiftReg));
+            }
+            i2cBitCount++;
+
+            // Check if byte is complete
+            if (i2cBitCount == 8) {
+                handleI2cByteComplete();
+                // Now bitCount==8 which indicates we're waiting for ACK clock to rise
+                // On next SCL rising (9th clock), bitCount will become 9
+                // Slave will drive SDA with ACK value when master reads
+            }
+        }
+        // bitCount==9 means we're waiting for ACK clock to fall - nothing to do on rising
+    }
+
+    /**
+     * Handle I2C SCL falling edge - prepare for next bit
+     */
+    private void handleI2cSclFalling() {
+        // bitCount==9 means ACK clock has risen and now fallen - reset for next byte
+        // bitCount==8 means 8th data bit clock is falling - wait for ACK clock
+        if (i2cBitCount == 9) {
+            logger.debug("I2C ACK cycle complete on SCL falling edge, resetting for next byte");
+            i2cBitCount = 0;
+            i2cShiftReg = 0;
+        }
+        // In read mode, this is when slave should update SDA for next bit
+        // The actual bit value is computed in getI2cSdaValue()
+    }
+
+    /**
+     * Handle completion of an I2C byte (8 bits received)
+     */
+    private void handleI2cByteComplete() {
+        int byteValue = i2cShiftReg & 0xFF;
+
+        if (i2cState == I2cState.ADDRESS) {
+            // Address byte: bits 7-1 = address, bit 0 = R/W
+            int address = (byteValue >> 1) & 0x7F;
+            i2cReadMode = (byteValue & 1) != 0;
+
+            logger.debug("I2C address byte: 0x{} (addr=0x{}, {})",
+                        String.format("%02X", byteValue),
+                        String.format("%02X", address),
+                        i2cReadMode ? "READ" : "WRITE");
+
+            // Look up device
+            i2cActiveDevice = i2cDevices.get(address);
+
+            if (i2cActiveDevice != null) {
+                // Device found - start transaction
+                i2cSlaveAck = i2cActiveDevice.start(i2cReadMode);
+                logger.debug("I2C device '{}' responded with {}",
+                            i2cActiveDevice.getName(), i2cSlaveAck ? "ACK" : "NACK");
+
+                if (i2cSlaveAck) {
+                    if (i2cReadMode) {
+                        // Switch to read mode - prepare first byte
+                        i2cState = I2cState.DATA_READ;
+                        i2cReadByte = i2cActiveDevice.readByte(true);
+                        logger.debug("I2C read mode, first byte: 0x{}", String.format("%02X", i2cReadByte));
+                    } else {
+                        // Switch to write mode
+                        i2cState = I2cState.DATA_WRITE;
+                        // Reset register pointer for DS3231
+                        if (i2cActiveDevice instanceof DS3231) {
+                            ((DS3231) i2cActiveDevice).resetRegisterPointer();
+                        }
+                    }
+                }
+            } else {
+                // No device at this address - NACK
+                i2cSlaveAck = false;
+                logger.debug("I2C no device at address 0x{}", String.format("%02X", address));
+            }
+        } else if (i2cState == I2cState.DATA_WRITE) {
+            // Data byte to slave
+            logger.debug("I2C write byte: 0x{}", String.format("%02X", byteValue));
+
+            if (i2cActiveDevice != null) {
+                i2cSlaveAck = i2cActiveDevice.writeByte(byteValue);
+                logger.debug("I2C device {} write", i2cSlaveAck ? "ACKed" : "NACKed");
+            } else {
+                i2cSlaveAck = false;
+            }
+        }
+        // DATA_READ bytes are handled in readByte calls during SCL rising edge
+    }
+
     public void reset() {
         // Reset all registers to power-on defaults
         portB = 0x00;
@@ -439,6 +763,22 @@ public class PeripheralController extends Device {
         for (SpiDevice device : spiDevices.values()) {
             device.reset();
             device.deselect();
+        }
+
+        // Reset I2C state
+        i2cState = I2cState.IDLE;
+        i2cSclPrevious = true;
+        i2cSdaPrevious = true;
+        i2cBitCount = 0;
+        i2cShiftReg = 0;
+        i2cActiveDevice = null;
+        i2cReadMode = false;
+        i2cReadByte = 0xFF;
+        i2cSlaveAck = false;
+
+        // Reset all I2C devices
+        for (I2cDevice device : i2cDevices.values()) {
+            device.reset();
         }
 
         // Reset step counter

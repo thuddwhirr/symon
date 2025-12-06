@@ -212,15 +212,15 @@ public class SpiSDCard implements SpiDevice {
                 if (usingResponseQueue && responseQueueIndex < responseQueueLength - 1) {
                     responseQueueIndex++;
                     prepareResponse(responseQueue[responseQueueIndex]);
-                    logger.info("SD Card R7: preparing next byte {}/{} = 0x{}",
-                               responseQueueIndex + 1, responseQueueLength,
-                               String.format("%02X", responseQueue[responseQueueIndex]));
+                    // logger.info("SD Card R7: preparing next byte {}/{} = 0x{}",
+                    //            responseQueueIndex + 1, responseQueueLength,
+                    //            String.format("%02X", responseQueue[responseQueueIndex]));
                 } else if (usingResponseQueue) {
                     // All bytes in queue have been sent
                     usingResponseQueue = false;
                     responseQueueIndex = 0;
                     responseQueueLength = 0;
-                    logger.info("SD Card R7 response complete - all {} bytes sent", responseQueueLength);
+                    // logger.info("SD Card R7 response complete - all {} bytes sent", responseQueueLength);
                 }
             }
         }
@@ -243,8 +243,8 @@ public class SpiSDCard implements SpiDevice {
     public void onSckFallingEdge() {
         // Check if we have a pending response to activate
         if (hasPendingResponse) {
-            logger.debug("SD Card SCK falling edge: activating pending response 0x{}",
-                        String.format("%02X", pendingResponseValue));
+            // logger.debug("SD Card SCK falling edge: activating pending response 0x{}",
+            //             String.format("%02X", pendingResponseValue));
             prepareResponse(pendingResponseValue);
             hasPendingResponse = false;
         }
@@ -265,7 +265,7 @@ public class SpiSDCard implements SpiDevice {
 
         // Don't process dummy bytes (0xFF) as commands - they're for reading responses
         if (byteReceived == 0xFF && !inCommand) {
-            logger.debug("SD Card received dummy byte 0xFF - not processing as command");
+            // logger.debug("SD Card received dummy byte 0xFF - not processing as command");
             return;
         }
 
@@ -283,15 +283,15 @@ public class SpiSDCard implements SpiDevice {
             commandBuffer[commandIndex] = byteReceived;
             commandIndex++;
             inCommand = true;
-            logger.debug("SD Card command byte {}: 0x{}", commandIndex-1, String.format("%02X", byteReceived));
+            // logger.debug("SD Card command byte {}: 0x{}", commandIndex-1, String.format("%02X", byteReceived));
 
             // Complete command processing - but don't prepare response yet
             if (commandIndex >= 6) {
                 // Complete command received - process it
-                logger.debug("SD Card complete command received: [{}, {}, {}, {}, {}]",
-                           String.format("%02X", commandBuffer[0]), String.format("%02X", commandBuffer[1]),
-                           String.format("%02X", commandBuffer[2]), String.format("%02X", commandBuffer[3]),
-                           String.format("%02X", commandBuffer[4]), String.format("%02X", commandBuffer[5]));
+                // logger.debug("SD Card complete command received: [{}, {}, {}, {}, {}]",
+                //            String.format("%02X", commandBuffer[0]), String.format("%02X", commandBuffer[1]),
+                //            String.format("%02X", commandBuffer[2]), String.format("%02X", commandBuffer[3]),
+                //            String.format("%02X", commandBuffer[4]), String.format("%02X", commandBuffer[5]));
 
                 // Store response value but don't prepare it yet (wait for SCK falling edge)
                 pendingResponseValue = processCommandAndGetResponse();
@@ -315,7 +315,7 @@ public class SpiSDCard implements SpiDevice {
                    ((long)(commandBuffer[3] & 0xFF) << 8) |
                    (commandBuffer[4] & 0xFF);
 
-        logger.debug("SD command: 0x{}, arg: 0x{}", String.format("%02X", cmd), String.format("%08X", arg));
+        // logger.debug("SD command: 0x{}, arg: 0x{}", String.format("%02X", cmd), String.format("%08X", arg));
 
         int responseValue = 0xFF; // Default no response
 
@@ -323,7 +323,7 @@ public class SpiSDCard implements SpiDevice {
             case CMD0: // GO_IDLE_STATE
                 state = CardState.IDLE;
                 responseValue = R1_IDLE;
-                logger.info("SD Card processed CMD0, will queue response=0x{}", String.format("%02X", responseValue));
+                // logger.info("SD Card processed CMD0, will queue response=0x{}", String.format("%02X", responseValue));
                 break;
 
             case CMD8: // SEND_IF_COND
@@ -341,12 +341,12 @@ public class SpiSDCard implements SpiDevice {
                     usingResponseQueue = true;
 
                     responseValue = responseQueue[0];  // Start with R1
-                    logger.info("CMD8 R7 response queue: [0x{}, 0x{}, 0x{}, 0x{}, 0x{}]",
-                               String.format("%02X", responseQueue[0]),
-                               String.format("%02X", responseQueue[1]),
-                               String.format("%02X", responseQueue[2]),
-                               String.format("%02X", responseQueue[3]),
-                               String.format("%02X", responseQueue[4]));
+                    // logger.info("CMD8 R7 response queue: [0x{}, 0x{}, 0x{}, 0x{}, 0x{}]",
+                    //            String.format("%02X", responseQueue[0]),
+                    //            String.format("%02X", responseQueue[1]),
+                    //            String.format("%02X", responseQueue[2]),
+                    //            String.format("%02X", responseQueue[3]),
+                    //            String.format("%02X", responseQueue[4]));
                 } else {
                     responseValue = R1_ILLEGAL_CMD;
                 }
@@ -422,16 +422,16 @@ public class SpiSDCard implements SpiDevice {
         if (dataTransferIndex == 0) {
             // First byte: send DATA_TOKEN
             responseValue = 0xFE; // DATA_TOKEN
-            logger.info("SD Card sending DATA_TOKEN (0xFE) for sector {}", currentSector);
+            // logger.info("SD Card sending DATA_TOKEN (0xFE) for sector {}", currentSector);
             dataTransferIndex++;
         } else if (dataTransferIndex <= SECTOR_SIZE) {
             // Send 512 bytes of sector data
             int dataIndex = dataTransferIndex - 1; // Convert to 0-based index
             if (dataIndex < SECTOR_SIZE) {
                 responseValue = dataBuffer[dataIndex] & 0xFF;
-                if (dataIndex < 16) { // Log first 16 bytes for debugging
-                    logger.debug("SD Card sending data byte {}: 0x{}", dataIndex, String.format("%02X", responseValue));
-                }
+                // if (dataIndex < 16) { // Log first 16 bytes for debugging
+                //     logger.debug("SD Card sending data byte {}: 0x{}", dataIndex, String.format("%02X", responseValue));
+                // }
                 dataTransferIndex++;
             }
         } else if (dataTransferIndex == SECTOR_SIZE + 1) {
@@ -439,14 +439,14 @@ public class SpiSDCard implements SpiDevice {
             int crc = calculateCRC16(dataBuffer, SECTOR_SIZE);
             // Send first CRC byte (high byte)
             responseValue = (crc >> 8) & 0xFF;
-            logger.debug("SD Card sending CRC byte 1 (high): 0x{}", String.format("%02X", responseValue));
+            // logger.debug("SD Card sending CRC byte 1 (high): 0x{}", String.format("%02X", responseValue));
             dataTransferIndex++;
         } else if (dataTransferIndex == SECTOR_SIZE + 2) {
             // Calculate CRC-16-CCITT for the sector
             int crc = calculateCRC16(dataBuffer, SECTOR_SIZE);
             // Send second CRC byte (low byte) and end transfer
             responseValue = crc & 0xFF;
-            logger.info("SD Card sending CRC byte 2 (low): 0x{} - transfer complete", String.format("%02X", responseValue));
+            // logger.info("SD Card sending CRC byte 2 (low): 0x{} - transfer complete", String.format("%02X", responseValue));
             inDataTransfer = false;
             dataTransferIndex = 0;
             dataSent = false;
@@ -474,7 +474,7 @@ public class SpiSDCard implements SpiDevice {
             }
 
             long byteOffset = currentSector * SECTOR_SIZE;
-            logger.info("DEBUG: Reading sector {}, byteOffset={}, cardSizeBytes={}", currentSector, byteOffset, cardSizeBytes);
+            // logger.info("DEBUG: Reading sector {}, byteOffset={}, cardSizeBytes={}", currentSector, byteOffset, cardSizeBytes);
             if (byteOffset >= cardSizeBytes) {
                 logger.error("Read beyond end of disk: sector {}", currentSector);
                 return;
@@ -483,24 +483,25 @@ public class SpiSDCard implements SpiDevice {
             imageFile.seek(byteOffset);
             Arrays.fill(dataBuffer, 0);
 
-            // Read sector data
+            // Read sector data using bulk read (much faster than byte-by-byte)
+            byte[] tempBuffer = new byte[SECTOR_SIZE];
+            int bytesRead = imageFile.read(tempBuffer, 0, SECTOR_SIZE);
+
+            // Convert byte array to int array (dataBuffer is int[] for unsigned byte handling)
             for (int i = 0; i < SECTOR_SIZE; i++) {
-                try {
-                    dataBuffer[i] = imageFile.read();
-                    if (dataBuffer[i] == -1) {
-                        dataBuffer[i] = 0xFF; // Fill with 0xFF if beyond file
-                    }
-                } catch (IOException e) {
-                    dataBuffer[i] = 0xFF;
+                if (i < bytesRead && bytesRead != -1) {
+                    dataBuffer[i] = tempBuffer[i] & 0xFF; // Convert to unsigned
+                } else {
+                    dataBuffer[i] = 0xFF; // Fill with 0xFF if beyond file
                 }
             }
 
             // Debug: Log first 16 bytes of sector data that will be sent
-            StringBuilder hexBytes = new StringBuilder();
-            for (int i = 0; i < 16; i++) {
-                hexBytes.append(String.format("%02X ", dataBuffer[i] & 0xFF));
-            }
-            logger.info("SD Card sector {} first 16 bytes: {}", currentSector, hexBytes.toString());
+            // StringBuilder hexBytes = new StringBuilder();
+            // for (int i = 0; i < 16; i++) {
+            //     hexBytes.append(String.format("%02X ", dataBuffer[i] & 0xFF));
+            // }
+            // logger.info("SD Card sector {} first 16 bytes: {}", currentSector, hexBytes.toString());
 
             // Prepare for data transfer
             inDataTransfer = true;
@@ -509,7 +510,7 @@ public class SpiSDCard implements SpiDevice {
             dataIndex = 0;
             writingData = false;
 
-            logger.info("SD Card prepared sector {} for reading", currentSector);
+            // logger.info("SD Card prepared sector {} for reading", currentSector);
 
         } catch (IOException e) {
             logger.error("Error reading from disk image: {}", e.getMessage());

@@ -94,6 +94,7 @@ public class Waffle2eMachine implements Machine {
     private final PS2Interface ps2Interface;
     private final PeripheralController peripheralController;
     private final SpiSDCard sdCard;
+    private final DS3231 rtc;
     
     public Waffle2eMachine(String romFile) throws Exception {
         this.bus = new Bus(BUS_BOTTOM, BUS_TOP);
@@ -121,7 +122,11 @@ public class Waffle2eMachine implements Machine {
         }
 
         this.peripheralController.registerSpiDevice(0, sdCard);
-        
+
+        // Initialize and register DS3231 RTC on I2C bus
+        this.rtc = new DS3231();
+        this.peripheralController.registerI2cDevice(rtc);
+
         // Add components to bus
         bus.addCpu(cpu);
         bus.addDevice(ram);
@@ -156,6 +161,7 @@ public class Waffle2eMachine implements Machine {
         logger.info("Serial Port 1: {}-{}", String.format("%04X", SERIAL1_BASE), String.format("%04X", SERIAL1_BASE + 0x03));
         logger.info("PS/2 Interface: {}-{}", String.format("%04X", PS2_BASE), String.format("%04X", PS2_BASE + 0x03));
         logger.info("Peripheral Controller: {}-{}", String.format("%04X", PERIPHERAL_BASE), String.format("%04X", PERIPHERAL_BASE + 0x0F));
+        logger.info("DS3231 RTC: I2C address 0x{}", String.format("%02X", DS3231.I2C_ADDRESS));
     }
     
     @Override
@@ -285,5 +291,13 @@ public class Waffle2eMachine implements Machine {
      */
     public PeripheralController getPeripheralController() {
         return peripheralController;
+    }
+
+    /**
+     * Get DS3231 RTC device
+     * @return RTC device
+     */
+    public DS3231 getRTC() {
+        return rtc;
     }
 }
