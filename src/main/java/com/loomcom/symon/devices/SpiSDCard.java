@@ -105,6 +105,8 @@ public class SpiSDCard implements SpiDevice {
     private int dataTransferIndex = 0;      // Index into data transfer sequence
     private boolean dataSent = false;       // Track if data token has been sent
     private boolean writingData = false;
+    private boolean awaitingWriteToken = false;  // Waiting for 0xFE data token after CMD24
+    private int writeDataIndex = 0;              // Index for receiving write data
     private long currentSector = 0;
 
     public SpiSDCard() {
@@ -163,6 +165,8 @@ public class SpiSDCard implements SpiDevice {
         dataTransferIndex = 0;
         dataSent = false;
         writingData = false;
+        awaitingWriteToken = false;
+        writeDataIndex = 0;
         Arrays.fill(preCalculatedResponseBits, 1); // Default high
         responseQueueIndex = 0;
         responseQueueLength = 0;
@@ -257,9 +261,28 @@ public class SpiSDCard implements SpiDevice {
         // logger.debug("SD Card processByte: received=0x{}, state={}, inCommand={}, cmdIndex={}, responseReady={}, inDataTransfer={}",
         //            String.format("%02X", byteReceived), state, inCommand, commandIndex, responseReady, inDataTransfer);
 
-        // Handle ongoing data transfer
-        if (inDataTransfer) {
+        // Handle ongoing data transfer (read mode)
+        if (inDataTransfer && !writingData) {
             handleDataTransfer(byteReceived);
+            return;
+        }
+
+        // Handle write data reception
+        if (awaitingWriteToken) {
+            if (byteReceived == DATA_TOKEN) {
+                // Got data token - now receive 512 bytes + 2 CRC bytes
+                awaitingWriteToken = false;
+                writingData = true;
+                writeDataIndex = 0;
+                logger.debug("SD Card received DATA_TOKEN, starting data reception for sector {}", currentSector);
+            }
+            // Ignore other bytes while waiting for token (0xFF dummy bytes)
+            return;
+        }
+
+        // Handle write data bytes
+        if (writingData) {
+            handleWriteData(byteReceived);
             return;
         }
 
@@ -375,7 +398,10 @@ public class SpiSDCard implements SpiDevice {
                 if (state == CardState.READY) {
                     currentSector = arg;
                     responseValue = R1_READY;
-                    // Wait for data token
+                    // After response is sent, wait for data token (0xFE)
+                    awaitingWriteToken = true;
+                    writeDataIndex = 0;
+                    logger.debug("SD Card CMD24: will write to sector {}", currentSector);
                 } else {
                     responseValue = R1_ILLEGAL_CMD;
                 }
@@ -514,6 +540,72 @@ public class SpiSDCard implements SpiDevice {
 
         } catch (IOException e) {
             logger.error("Error reading from disk image: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Handle incoming write data bytes (512 data + 2 CRC)
+     * After receiving all bytes, write to disk and send DATA_ACCEPTED response
+     */
+    private void handleWriteData(int byteReceived) {
+        if (writeDataIndex < SECTOR_SIZE) {
+            // Receiving data bytes
+            dataBuffer[writeDataIndex] = byteReceived & 0xFF;
+            writeDataIndex++;
+
+            if (writeDataIndex == SECTOR_SIZE) {
+                logger.debug("SD Card received all 512 data bytes for sector {}", currentSector);
+            }
+        } else if (writeDataIndex == SECTOR_SIZE) {
+            // First CRC byte - ignore (we don't validate CRC)
+            writeDataIndex++;
+        } else if (writeDataIndex == SECTOR_SIZE + 1) {
+            // Second CRC byte - now write to disk and respond
+            writeDataIndex++;
+
+            // Write data to image file
+            writeToImage();
+
+            // Send DATA_ACCEPTED response (0x05)
+            // Format: xxx0 0101 where xxx are don't care bits
+            prepareResponse(DATA_ACCEPTED);
+
+            // After DATA_ACCEPTED, card goes busy (MISO low), then ready (MISO high)
+            // For simplicity, we'll just send the response and be done
+            writingData = false;
+            logger.debug("SD Card write complete for sector {}, sent DATA_ACCEPTED", currentSector);
+        }
+    }
+
+    /**
+     * Write dataBuffer to the disk image at currentSector
+     */
+    private void writeToImage() {
+        try {
+            if (imageFile == null) {
+                logger.error("No disk image mounted for write operation");
+                return;
+            }
+
+            long byteOffset = currentSector * SECTOR_SIZE;
+            if (byteOffset >= cardSizeBytes) {
+                logger.error("Write beyond end of disk: sector {}", currentSector);
+                return;
+            }
+
+            imageFile.seek(byteOffset);
+
+            // Convert int array to byte array
+            byte[] tempBuffer = new byte[SECTOR_SIZE];
+            for (int i = 0; i < SECTOR_SIZE; i++) {
+                tempBuffer[i] = (byte) dataBuffer[i];
+            }
+
+            imageFile.write(tempBuffer);
+            logger.info("SD Card wrote sector {} to disk image", currentSector);
+
+        } catch (IOException e) {
+            logger.error("Error writing to disk image: {}", e.getMessage());
         }
     }
 

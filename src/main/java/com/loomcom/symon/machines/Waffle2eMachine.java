@@ -112,7 +112,7 @@ public class Waffle2eMachine implements Machine {
         this.sdCard = new SpiSDCard();
 
         // Mount test disk image if available
-        String testDiskPath = "/Users/johnwolthuis/projects/waffle2e_computer/software/test_programs/test_disk_old.img";
+        String testDiskPath = "/Users/johnwolthuis/projects/waffle2e_computer/software/test_programs/test_disk_fresh.img";
         File testDisk = new File(testDiskPath);
         if (testDisk.exists()) {
             logger.info("Mounting test disk image: {}", testDiskPath);
