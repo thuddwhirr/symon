@@ -91,7 +91,7 @@ public class DS3231 implements I2cDevice {
     public boolean start(boolean isRead) {
         inTransaction = true;
         isReadMode = isRead;
-        logger.debug("DS3231 START: {} mode, register pointer = 0x{}",
+        logger.info("DS3231 START: {} mode, register pointer = 0x{}",
                     isRead ? "READ" : "WRITE", String.format("%02X", registerPointer));
         return true;  // Always ACK our address
     }
@@ -122,7 +122,7 @@ public class DS3231 implements I2cDevice {
         if (registerPointer < 0) {
             // First byte sets register pointer
             registerPointer = data % NUM_REGISTERS;
-            logger.debug("DS3231 register pointer set to 0x{}", String.format("%02X", registerPointer));
+            logger.info("DS3231 register pointer set to 0x{}", String.format("%02X", registerPointer));
         } else {
             // Write to current register
             writeRegister(registerPointer, data);
@@ -140,7 +140,7 @@ public class DS3231 implements I2cDevice {
         }
 
         int value = readRegister(registerPointer);
-        logger.debug("DS3231 READ: 0x{} from register 0x{}, master will {}",
+        logger.info("DS3231 READ: 0x{} from register 0x{}, master will {}",
                     String.format("%02X", value), String.format("%02X", registerPointer),
                     ack ? "ACK" : "NACK");
 
@@ -246,33 +246,57 @@ public class DS3231 implements I2cDevice {
     private int readTimeRegister(int reg) {
         LocalDateTime now = LocalDateTime.now().plusNanos(timeOffsetMillis * 1_000_000);
 
+        // Log all time components once when reading seconds (first register)
+        if (reg == REG_SECONDS) {
+            logger.info("DS3231 SYSTEM TIME: {}-{}-{} {}:{}:{} DOW={} ({})",
+                       now.getYear(), now.getMonthValue(), now.getDayOfMonth(),
+                       now.getHour(), now.getMinute(), now.getSecond(),
+                       now.getDayOfWeek().getValue(), now.getDayOfWeek());
+        }
+
+        int value;
         switch (reg) {
             case REG_SECONDS:
-                return binaryToBcd(now.getSecond());
+                value = binaryToBcd(now.getSecond());
+                logger.info("DS3231 READ SECONDS: {} -> BCD 0x{}", now.getSecond(), String.format("%02X", value));
+                return value;
             case REG_MINUTES:
-                return binaryToBcd(now.getMinute());
+                value = binaryToBcd(now.getMinute());
+                logger.info("DS3231 READ MINUTES: {} -> BCD 0x{}", now.getMinute(), String.format("%02X", value));
+                return value;
             case REG_HOURS:
                 // 24-hour mode (bit 6 = 0)
-                return binaryToBcd(now.getHour());
+                value = binaryToBcd(now.getHour());
+                logger.info("DS3231 READ HOURS: {} -> BCD 0x{}", now.getHour(), String.format("%02X", value));
+                return value;
             case REG_DAY:
                 // Day of week: 1 = Sunday, 7 = Saturday
-                // Java: 1 = Monday, 7 = Sunday
-                int dow = now.getDayOfWeek().getValue();  // 1=Mon, 7=Sun
-                dow = (dow % 7) + 1;  // Convert to 1=Sun, 7=Sat
-                return dow;
+                // Java DayOfWeek: 1 = Monday, 7 = Sunday
+                int javaDow = now.getDayOfWeek().getValue();  // 1=Mon, 7=Sun
+                // Convert: Java Sunday(7)->1, Monday(1)->2, Tuesday(2)->3, etc.
+                value = (javaDow % 7) + 1;
+                logger.info("DS3231 READ DAY: Java DOW {} ({}) -> DS3231 DOW {}",
+                            javaDow, now.getDayOfWeek(), value);
+                return value;
             case REG_DATE:
-                return binaryToBcd(now.getDayOfMonth());
+                value = binaryToBcd(now.getDayOfMonth());
+                logger.info("DS3231 READ DATE: {} -> BCD 0x{}", now.getDayOfMonth(), String.format("%02X", value));
+                return value;
             case REG_MONTH:
                 // Bit 7 is century bit (set if year >= 2100)
-                int month = binaryToBcd(now.getMonthValue());
+                value = binaryToBcd(now.getMonthValue());
                 if (now.getYear() >= 2100) {
-                    month |= 0x80;
+                    value |= 0x80;
                 }
-                return month;
+                logger.info("DS3231 READ MONTH: {} -> BCD 0x{}", now.getMonthValue(), String.format("%02X", value));
+                return value;
             case REG_YEAR:
                 // Year is 00-99 (relative to 2000 or 2100 based on century bit)
-                int year = now.getYear() % 100;
-                return binaryToBcd(year);
+                int yearVal = now.getYear() % 100;
+                value = binaryToBcd(yearVal);
+                logger.info("DS3231 READ YEAR: {} ({} % 100 = {}) -> BCD 0x{}",
+                            now.getYear(), now.getYear(), yearVal, String.format("%02X", value));
+                return value;
             default:
                 return 0;
         }

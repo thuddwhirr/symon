@@ -129,6 +129,8 @@ public class PeripheralController extends Device {
     // - When bitCount reaches 8, handleI2cByteComplete() is called and bitCount stays at 8
     // - bitCount==8 indicates we're in ACK phase (between 8th data bit and next byte)
     // - On SCL falling edge after ACK, bitCount resets to 0 for next byte
+    // - For ADDRESS->DATA_READ transition, we defer state change until ACK cycle completes
+    private boolean i2cPendingReadMode = false;  // True if we need to switch to DATA_READ after ACK
 
     public PeripheralController(int address) throws MemoryRangeException {
         super(address, address + PERIPHERAL_SIZE - 1, "Waffle2e Peripheral Controller");
@@ -502,27 +504,43 @@ public class PeripheralController extends Device {
      * During slave ACK or data read phases, the slave controls SDA.
      */
     private int getI2cSdaValue() {
-        // During ACK phase (bitCount 8 or 9), slave drives ACK
-        // bitCount==8: waiting for ACK clock to rise (8th bit done, ACK clock not yet)
-        // bitCount==9: ACK clock has risen, master is reading now
-        if ((i2cBitCount == 8 || i2cBitCount == 9) && i2cState != I2cState.IDLE) {
-            // ACK phase - return slave's ACK (low = ACK, high = NACK)
+        // During read mode, slave drives SDA with data bits
+        // I2C read timing (6502 driver):
+        //   1. Master clocks SCL high (handleI2cSclRising increments bitCount)
+        //   2. Master samples SDA (calls this method)
+        //   3. Master clocks SCL low
+        //   4. Repeat
+        //
+        // So when getI2cSdaValue is called, bitCount has ALREADY been incremented:
+        //   bitCount=1: Master is reading bit 7 (MSB) - first bit
+        //   bitCount=2: Master is reading bit 6
+        //   ...
+        //   bitCount=8: Master is reading bit 0 (LSB) - last bit
+        if (i2cState == I2cState.DATA_READ && i2cBitCount >= 1 && i2cBitCount <= 8) {
+            // Return current bit of read byte (MSB first)
+            // bitCount 1 = bit 7 (MSB), bitCount 8 = bit 0 (LSB)
+            int bitPos = 8 - i2cBitCount;
+            int bitValue = (i2cReadByte >> bitPos) & 1;
+            logger.info("I2C getI2cSdaValue: DATA_READ bitCount={}, bitPos={}, readByte=0x{}, returning {}",
+                        i2cBitCount, bitPos, String.format("%02X", i2cReadByte), bitValue);
+            return bitValue;
+        }
+
+        // Log if we're in DATA_READ but bitCount is out of range for data bits
+        if (i2cState == I2cState.DATA_READ && i2cBitCount != 0 && i2cBitCount != 9) {
+            logger.info("I2C getI2cSdaValue: DATA_READ but bitCount={} (out of range 1-8), returning pull-up",
+                        i2cBitCount);
+        }
+
+        // During ACK phase, slave drives ACK (for ADDRESS and DATA_WRITE states)
+        // or master drives ACK (for DATA_READ - but that's handled by master, not here)
+        // bitCount==8 after byte complete, bitCount==9 after ACK clock rises
+        if ((i2cBitCount == 8 || i2cBitCount == 9) && i2cState != I2cState.IDLE && i2cState != I2cState.DATA_READ) {
+            // ACK phase for write operations - slave drives ACK
             int sdaValue = i2cSlaveAck ? 0 : 1;
             logger.debug("I2C getI2cSdaValue: ACK phase (bitCount={}), slaveAck={}, returning {}",
                         i2cBitCount, i2cSlaveAck, sdaValue);
             return sdaValue;
-        }
-
-        // During read mode, slave drives SDA with data bits
-        if (i2cState == I2cState.DATA_READ && i2cBitCount >= 1 && i2cBitCount <= 8) {
-            // Return current bit of read byte (MSB first)
-            // Note: bitCount has already been incremented by handleI2cSclRising() before
-            // the master reads SDA, so we use bitCount-1 to get the correct bit position
-            int bitPos = 7 - (i2cBitCount - 1);
-            int bitValue = (i2cReadByte >> bitPos) & 1;
-            logger.debug("I2C getI2cSdaValue: DATA_READ bit {}, readByte=0x{}, returning {}",
-                        i2cBitCount - 1, String.format("%02X", i2cReadByte), bitValue);
-            return bitValue;
         }
 
         // Otherwise, SDA floats high (pull-up)
@@ -590,6 +608,7 @@ public class PeripheralController extends Device {
         i2cShiftReg = 0;
         i2cActiveDevice = null;
         i2cSlaveAck = false;
+        i2cPendingReadMode = false;
     }
 
     /**
@@ -610,6 +629,7 @@ public class PeripheralController extends Device {
         i2cActiveDevice = null;
         i2cReadMode = false;
         i2cSlaveAck = false;
+        i2cPendingReadMode = false;
     }
 
     /**
@@ -673,6 +693,14 @@ public class PeripheralController extends Device {
             logger.debug("I2C ACK cycle complete on SCL falling edge, resetting for next byte");
             i2cBitCount = 0;
             i2cShiftReg = 0;
+
+            // If we have a pending read mode transition, do it now
+            if (i2cPendingReadMode && i2cActiveDevice != null) {
+                i2cState = I2cState.DATA_READ;
+                i2cReadByte = i2cActiveDevice.readByte(true);
+                i2cPendingReadMode = false;
+                logger.debug("I2C switching to DATA_READ mode, first byte: 0x{}", String.format("%02X", i2cReadByte));
+            }
         }
         // In read mode, this is when slave should update SDA for next bit
         // The actual bit value is computed in getI2cSdaValue()
@@ -705,10 +733,12 @@ public class PeripheralController extends Device {
 
                 if (i2cSlaveAck) {
                     if (i2cReadMode) {
-                        // Switch to read mode - prepare first byte
-                        i2cState = I2cState.DATA_READ;
-                        i2cReadByte = i2cActiveDevice.readByte(true);
-                        logger.debug("I2C read mode, first byte: 0x{}", String.format("%02X", i2cReadByte));
+                        // Don't switch to DATA_READ yet - wait for ACK cycle to complete
+                        // The master needs to clock the ACK bit first (9th clock)
+                        // We'll switch to DATA_READ and fetch first byte in handleI2cSclFalling()
+                        // when bitCount==9 (after ACK clock completes)
+                        i2cPendingReadMode = true;
+                        logger.debug("I2C read mode pending, will fetch first byte after ACK");
                     } else {
                         // Switch to write mode
                         i2cState = I2cState.DATA_WRITE;
@@ -775,6 +805,7 @@ public class PeripheralController extends Device {
         i2cReadMode = false;
         i2cReadByte = 0xFF;
         i2cSlaveAck = false;
+        i2cPendingReadMode = false;
 
         // Reset all I2C devices
         for (I2cDevice device : i2cDevices.values()) {
