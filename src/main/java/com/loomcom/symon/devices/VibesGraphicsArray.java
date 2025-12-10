@@ -455,8 +455,15 @@ public class VibesGraphicsArray extends Device {
     }
     
     private void executeWritePixelPos() {
+        // Set position from ARG0-ARG3
         executePixelPosition();
-        executeWritePixel();
+
+        // Color is in ARG4 (not ARG0 like WRITE_PIXEL uses)
+        int color = argumentRegisters[4];
+        int videoMode = modeRegister & MODE_MASK;
+
+        writePixelToCurrentMode(pixelCursorX, pixelCursorY, color, videoMode);
+        advancePixelCursor(videoMode);
     }
     
     private void executeClearScreen() {
