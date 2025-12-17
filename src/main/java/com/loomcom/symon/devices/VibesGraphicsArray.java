@@ -339,12 +339,12 @@ public class VibesGraphicsArray extends Device {
     }
     
     private void executeTextClear() {
-        char fillChar = (char) argumentRegisters[0];
-        int color = argumentRegisters[1];
+        // ARG0 = attributes (color), character is always 0x00 (null/space)
+        int color = argumentRegisters[0];
 
         for (int y = 0; y < 30; y++) {
             for (int x = 0; x < 80; x++) {
-                textBuffer[y][x] = fillChar;
+                textBuffer[y][x] = '\0';  // Clear to null character
                 textColorBuffer[y][x] = color;
             }
         }

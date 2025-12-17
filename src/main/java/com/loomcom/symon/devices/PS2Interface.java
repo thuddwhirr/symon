@@ -130,6 +130,7 @@ public class PS2Interface extends Device implements KeyListener {
         SCAN_CODE_MAP[KeyEvent.VK_SHIFT] = 0x12;
         SCAN_CODE_MAP[KeyEvent.VK_CONTROL] = 0x14;
         SCAN_CODE_MAP[KeyEvent.VK_ALT] = 0x11;
+        SCAN_CODE_MAP[KeyEvent.VK_CAPS_LOCK] = 0x58;
 
         // Punctuation keys
         SCAN_CODE_MAP[KeyEvent.VK_COMMA] = 0x41;         // , <
@@ -451,30 +452,46 @@ public class PS2Interface extends Device implements KeyListener {
     // KeyListener interface implementation
     @Override
     public void keyPressed(KeyEvent e) {
-        logger.info("KEY EVENT: {} (keyCode={})", KeyEvent.getKeyText(e.getKeyCode()), e.getKeyCode());
+        logger.info("KEY EVENT PRESSED: {} (keyCode={})", KeyEvent.getKeyText(e.getKeyCode()), e.getKeyCode());
         int scanCode = SCAN_CODE_MAP[e.getKeyCode()];
         if (scanCode != 0) {
             keyQueue.offer(scanCode);
             updateDataReadyStatus();
             notifyListeners();
-            logger.info("Key pressed: {} (scan code: {}) - SCAN_CODE_MAP[{}] = {}", 
-                        KeyEvent.getKeyText(e.getKeyCode()), String.format("%02X", scanCode), 
+            logger.info("Key pressed: {} (scan code: {}) - SCAN_CODE_MAP[{}] = {}",
+                        KeyEvent.getKeyText(e.getKeyCode()), String.format("%02X", scanCode),
                         e.getKeyCode(), String.format("%02X", scanCode));
         } else {
-            logger.info("No scan code mapping for key: {} (keyCode={}) - SCAN_CODE_MAP[{}] = 0", 
+            logger.info("No scan code mapping for key: {} (keyCode={}) - SCAN_CODE_MAP[{}] = 0",
                        KeyEvent.getKeyText(e.getKeyCode()), e.getKeyCode(), e.getKeyCode());
         }
     }
-    
+
     @Override
     public void keyReleased(KeyEvent e) {
+        logger.info("KEY EVENT RELEASED: {} (keyCode={})", KeyEvent.getKeyText(e.getKeyCode()), e.getKeyCode());
+
+        // macOS treats Caps Lock as a toggle - it sends keyPressed when turning ON
+        // and keyReleased when turning OFF, one event per physical press.
+        // Real PS/2 sends make+break for every press. To simulate proper PS/2,
+        // treat the macOS "released" event as another toggle (send make code only).
+        if (e.getKeyCode() == KeyEvent.VK_CAPS_LOCK) {
+            int scanCode = SCAN_CODE_MAP[e.getKeyCode()];
+            keyQueue.offer(scanCode);  // Send make code, not break code
+            updateDataReadyStatus();
+            notifyListeners();
+            logger.info("Caps Lock toggle (macOS workaround): sending make code {}",
+                        String.format("%02X", scanCode));
+            return;
+        }
+
         int scanCode = SCAN_CODE_MAP[e.getKeyCode()];
         if (scanCode != 0) {
             keyQueue.offer(0xF0); // Break code prefix
             keyQueue.offer(scanCode);
             updateDataReadyStatus();
             notifyListeners();
-            logger.debug("Key released: {} (scan code: {})", 
+            logger.info("Key released: {} (scan code: F0 {})",
                         KeyEvent.getKeyText(e.getKeyCode()), String.format("%02X", scanCode));
         }
     }
