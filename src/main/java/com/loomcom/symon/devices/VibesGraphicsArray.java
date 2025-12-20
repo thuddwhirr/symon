@@ -81,6 +81,7 @@ public class VibesGraphicsArray extends Device {
     private static final int INSTR_TEXT_CLEAR = 0x02;      // Clear screen with attributes
     private static final int INSTR_GET_TEXT_AT = 0x03;     // Read character at position
     private static final int INSTR_TEXT_COMMAND = 0x04;    // Process ASCII control characters
+    private static final int INSTR_GET_CURSOR_POS = 0x05;  // Get cursor position (col in RESULT0, row in RESULT1)
     private static final int INSTR_WRITE_PIXEL = 0x10;     // Write pixel at cursor
     private static final int INSTR_PIXEL_POS = 0x11;       // Set pixel cursor position
     private static final int INSTR_WRITE_PIXEL_POS = 0x12; // Set position and write pixel
@@ -155,12 +156,12 @@ public class VibesGraphicsArray extends Device {
                 instructionRegister = data & 0xFF;
                 // Don't execute here - wait for trigger register
                 break;
-                
+
             case REG_ARG0: case REG_ARG1: case REG_ARG2: case REG_ARG3: case REG_ARG4:
             case REG_ARG5: case REG_ARG6: case REG_ARG7: case REG_ARG8: case REG_ARG9:
                 int argIndex = address - REG_ARG0;
                 argumentRegisters[argIndex] = data & 0xFF;
-                
+
                 // Execute instruction if this is the trigger register
                 if (shouldExecuteInstruction(instructionRegister, argIndex)) {
                     executeInstruction();
@@ -220,6 +221,8 @@ public class VibesGraphicsArray extends Device {
                 return argIndex == 1;
             case INSTR_TEXT_COMMAND:    // $04 - Execute on ARG0 ($4002) write
                 return argIndex == 0;
+            case INSTR_GET_CURSOR_POS:  // $05 - Execute on ARG0 (0=row, 1=col)
+                return argIndex == 0;
             case INSTR_WRITE_PIXEL:     // $10 - Execute on ARG0 ($4002) write
                 return argIndex == 0;
             case INSTR_PIXEL_POS:       // $11 - Execute on ARG3 ($4005) write
@@ -263,6 +266,10 @@ public class VibesGraphicsArray extends Device {
 
                 case INSTR_TEXT_COMMAND:
                     executeTextCommand();
+                    break;
+
+                case INSTR_GET_CURSOR_POS:
+                    executeGetCursorPos();
                     break;
 
                 case INSTR_WRITE_PIXEL:
@@ -421,6 +428,15 @@ public class VibesGraphicsArray extends Device {
             resultRegisters[1] = textColorBuffer[y][x];
         } else {
             statusRegister |= STATUS_ERROR;
+        }
+    }
+
+    private void executeGetCursorPos() {
+        int selector = argumentRegisters[0];
+        if (selector == 0) {
+            resultRegisters[0] = textCursorY;  // Row
+        } else {
+            resultRegisters[0] = textCursorX;  // Column
         }
     }
 
